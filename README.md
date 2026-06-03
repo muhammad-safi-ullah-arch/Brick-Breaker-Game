@@ -228,8 +228,8 @@ Brick-Breaker-Game/
 │
 ├── .gitignore
 |
-├──README.md
-└──LICENSE
+├──LICENSE
+└──README.md
 
 ```
 
