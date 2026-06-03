@@ -1,6 +1,11 @@
 # Paddle Royale
 
-## Two-Player Brick Breaker with Competitive Faceoff Mode
+![C++](https://img.shields.io/badge/C%2B%2B-17-blue)
+![SFML](https://img.shields.io/badge/SFML-3.0-green)
+![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
+![License](https://img.shields.io/badge/License-MIT-green)
+
+## Single-Player and Two-Player Brick Breaker with Competitive Faceoff Mode
 
 ## Table of Contents
 
@@ -102,15 +107,15 @@ After brick clearing:
 
 ### Additional Features
 
-* Local multiplayer support
-* Single-player functionality
-* Dynamic paddle scaling system
-* Background music
-* Audio controls and mute functionality
-* Interactive menu interface
-* Real-time keyboard input processing
-* Multiple game states
-* Full-screen gameplay experience
+- Local multiplayer support
+- Single-player functionality
+- Dynamic paddle scaling system
+- Background music
+- Audio controls and mute functionality
+- Interactive menu interface
+- Real-time keyboard input processing
+- Multiple game states
+- Full-screen gameplay experience
 
 ---
 
@@ -166,31 +171,36 @@ After brick clearing:
 
 ### Main Menu
 
-Add screenshot here:
+![Main Menu](screenshots/main-menu.jpg)
 
-```markdown
-![Main Menu](screenshots/main-menu.png)
-```
+### Single Player Mode
 
-### Gameplay
+![Single Player Mode](screenshots/single-player-mode.jpg)
 
-```markdown
-![Gameplay](screenshots/gameplay.png)
-```
+### Two Player Mode
+
+![Two Player Mode](screenshots/two-player-mode.jpg)
+
+### Gameplay Mode
+
+![Gameplay Mode](screenshots/gameplay-mode.jpg)
+
+### Waiting Phase
+
+![Waiting Phase](screenshots/waiting-phase.jpg)
 
 ### Faceoff Mode
 
-```markdown
-![Faceoff Mode](screenshots/faceoff-mode.png)
-```
+![Faceoff Mode](screenshots/faceoff-mode.jpg)
 
-### Game Over Screen
+### Pause Menu
 
-```markdown
-![Game Over](screenshots/game-over.png)
-```
+![Pause Menu](screenshots/Pause-menu.jpg)
 
----
+### End Game Screen
+
+![End Game Screen](screenshots/end-game.jpg)
+
 
 ## Project Structure
 
@@ -200,19 +210,29 @@ Brick-Breaker-Game/
 │   ├── ARIAL.TTF
 │   └── Snowy.mp3
 │
+├── doc/
+│   └── Project Report.pdf
+│
+├── screenshots/
+│   ├── main-menu.jpg
+│   ├── single-player-mode.jpg
+│   ├── two-player-mode.jpg
+│   ├── gameplay-mode.jpg
+│   ├── waiting-phase.jpg
+│   ├── faceoff-mode.jpg
+│   ├── Pause-menu.jpg
+│   └── end-game.jpg
+│
 ├── src/
 │   └── brickBreaker.cpp
 │
-├── screenshots/
-│
-├── docs/
-│   └── Project_Report.pdf
-│
 ├── .gitignore
-└── README.md
+|
+├──README.md
+└──LICENSE
+
 ```
 
----
 
 ## Installation
 
@@ -237,13 +257,24 @@ g++ -std=c++17 src/brickBreaker.cpp -o PaddleRoyale ^
 
 ## Documentation
 
-Complete project documentation is available in:
+The complete project report and technical documentation are available in:
 
 ```text
-docs/Project_Report.pdf
+doc/Project Report.pdf
 ```
 
----
+The report contains:
+
+* Project objectives
+* Design methodology
+* System architecture
+* Gameplay mechanics
+* Implementation details
+* Testing and evaluation
+* Conclusions and future enhancements
+
+```
+```
 
 ## Version History
 
@@ -296,5 +327,12 @@ The complete project report is available in:
 
 ```text
 docs/Project_Report.pdf
+
 ```
+
+## License
+
+This project is licensed under the MIT License.
+
+See the [LICENSE](LICENSE) file for details.
 
