@@ -1,849 +1,659 @@
-// ============================================================
-//  BRICK BREAKER DUO — Main Source File
-//  A two-player (or one-player) split-screen brick breaker
-//  built with SFML.
-//
-//  Screens / States:
-//    StartScreen  → Choose 1 or 2 players, swap controls, mute
-//    Settings     → FPS slider (60–120), back button
-//    Playing      → Actual brick breaker game
-//    GameOver     → Shows who lost, Try Again / Main Menu buttons
-//
-//  Controls (default, 2-player):
-//    Player 1 (bottom) : LEFT / RIGHT arrow keys
-//    Player 2 (top)    : A / D keys
-//    TAB               : Swap controls (start screen only)
-//    M                 : Toggle music mute (all screens)
-//
-//  1-Player mode:
-//    Only the bottom paddle (P1) is active.
-//    The top is a simple CPU paddle that follows ball 2.
-//    Ball 2 still exists; if it escapes the top the CPU "loses"
-//    (i.e. it resets rather than ending the game).
-//
-//  Music: Place "undertale.ogg" (or "music.ogg") next to the
-//         executable to enable background music.
-// ============================================================
+#include <SFML/Graphics.hpp>
+#include <SFML/Audio.hpp>
+#include <vector>
+#include <cstdlib>
+#include <ctime>
+#include <optional>
+#include <string>
+#include <cmath>
+#include <iostream>
 
-#include <SFML/Graphics.hpp>   // Window, shapes, text, rendering
-#include <SFML/Audio.hpp>      // Music / sound support
-#include <vector>              // std::vector for bricks & stars
-#include <optional>            // std::optional for event polling
-#include <algorithm>           // std::shuffle, std::clamp
-#include <random>              // std::random_device, std::mt19937
-#include <string>              // std::string for HUD labels
-#include <cmath>               // std::sin, std::abs
-#include <cstdint>             // uint8_t
+// --- Game States ---
+enum class State { TITLE, BREAKER, WAITING, FACEOFF, GAME_OVER };
+
+// --- Player Data Structure ---
+struct Player {
+    sf::RectangleShape paddle;
+    sf::CircleShape ball;
+    int lives = 6; 
+    bool isBot = false;
+    bool ballAttached = true;
+    sf::Vector2f ballVel{ 0.f, 0.f };
+    bool bricksFinished = false;
+    
+    int sizeLevel = 4; 
+
+    float getCurrentWidth() const {
+        return sizeLevel * 60.f; 
+    }
+
+    void updateSize(int deltaLevel) {
+        sizeLevel += deltaLevel;
+        if (sizeLevel < 1) sizeLevel = 1; 
+        if (sizeLevel > 7) sizeLevel = 7; 
+        
+        paddle.setSize({ getCurrentWidth(), 20.f });
+        paddle.setOrigin({ getCurrentWidth() / 2.f, 10.f });
+    }
+
+    void resetBall(float startY, bool isTop) {
+        ballAttached = true;
+        ballVel = { 0.f, 0.f };
+        paddle.setPosition({ 960.f, startY });
+        float yOffset = isTop ? 20.f : -20.f;
+        ball.setPosition({ 960.f, startY + yOffset });
+    }
+};
+
+// --- Brick Structure ---
+struct Brick {
+    sf::RectangleShape shape;
+    bool destroyed = false;
+    int type = 0; 
+    bool isPlayer1Side = false;
+};
+
+// --- Physics Helper ---
+void enforceMinimumVerticalAngle(sf::Vector2f& vel, float speed) {
+    float minY = speed * 0.2f; 
+    if (std::abs(vel.y) < minY) {
+        vel.y = (vel.y > 0) ? minY : -minY;
+        float newMag = std::sqrt(vel.x * vel.x + vel.y * vel.y);
+        vel.x = (vel.x / newMag) * speed;
+        vel.y = (vel.y / newMag) * speed;
+    }
+}
 
 int main() {
+    std::srand(static_cast<unsigned>(std::time(nullptr)));
+    
+    // --- FULLSCREEN WINDOW SETUP ---
+    // Notice the sf::State::Fullscreen flag added here!
+    sf::RenderWindow window(sf::VideoMode({ 1920, 1080 }), "PADDLE ROYALE", sf::State::Fullscreen);
+    window.setFramerateLimit(60);
 
-    // ----------------------------------------------------------
-    //  WINDOW SETUP  —  1920 × 1080 fullscreen-style window
-    // ----------------------------------------------------------
-    sf::RenderWindow window(sf::VideoMode({1920, 960}), "Brick Breaker Duo");
-    window.setFramerateLimit(60); // Initial FPS cap — changed by settings slider
-
-    // Convenience scale factors so all original 800×600 coordinates
-    // are mapped to the 1920×960 viewport automatically.
-    const float SX = 1920.f / 800.f; // Horizontal scale  (2.4×)
-    const float SY =  960.f / 600.f; // Vertical scale    (1.6×)
-
-    // Helper: scale a point from "design space" (800×600) to screen space
-    auto sp = [&](float x, float y) -> sf::Vector2f {
-        return {x * SX, y * SY};
-    };
-    // Helper: scale a size
-    auto ss = [&](float w, float h) -> sf::Vector2f {
-        return {w * SX, h * SY};
-    };
-
-    // ----------------------------------------------------------
-    //  FONT LOADING
-    // ----------------------------------------------------------
     sf::Font font;
-    bool fontLoaded = font.openFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf");
-    if (!fontLoaded) fontLoaded = font.openFromFile("/System/Library/Fonts/Helvetica.ttc");
-    if (!fontLoaded) fontLoaded = font.openFromFile("C:/Windows/Fonts/arial.ttf");
+    if (!font.openFromFile("C:\\Windows\\Fonts\\arial.ttf")) { 
+        std::cerr << "Warning: arial.ttf not found.\n";
+    }
 
-    // ----------------------------------------------------------
-    //  BACKGROUND — STARFIELD  (shared across all screens)
-    // ----------------------------------------------------------
-    std::random_device rdBg;
-    std::mt19937 gBg(rdBg());
-    std::uniform_real_distribution<float> distX(0.f, 1920.f);
-    std::uniform_real_distribution<float> distY(0.f,  960.f);
-    std::uniform_int_distribution<int>    distSize(1, 4);
+    // --- AUDIO SETUP ---
+    sf::Music bgMusic;
+    bool isMuted = false;
+    if (!bgMusic.openFromFile("Snowy.mp3")) {
+        std::cerr << "Warning: Snowy.mp3 not found.\n";
+    } else {
+        bgMusic.setLooping(true); 
+        bgMusic.setVolume(50.f);
+        bgMusic.play();
+    }
 
+    // --- STARFIELD BACKGROUND SETUP ---
     std::vector<sf::CircleShape> stars;
-    for (int i = 0; i < 200; ++i) {
-        sf::CircleShape star(static_cast<float>(distSize(gBg)));
-        star.setFillColor(sf::Color(255, 255, 255, 100 + (gBg() % 155)));
-        star.setPosition({distX(gBg), distY(gBg)});
+    for (int i = 0; i < 250; ++i) {
+        float radius = (std::rand() % 30) / 20.f + 0.5f; 
+        sf::CircleShape star(radius);
+        star.setPosition({ static_cast<float>(std::rand() % 1920), static_cast<float>(std::rand() % 1080) });
+        int alpha = std::rand() % 155 + 100;
+        star.setFillColor(sf::Color(255, 255, 255, alpha));
         stars.push_back(star);
     }
 
-    sf::RectangleShape bgTop(ss(800.f, 300.f));
-    bgTop.setFillColor(sf::Color(10, 5, 35));
-    bgTop.setPosition(sp(0.f, 0.f));
+    State gameState = State::TITLE;
+    bool isPaused = false;
+    bool isSinglePlayer = false;
+    bool controlsSwapped = false; 
+    
+    // UI Panels (Walls)
+    sf::RectangleShape leftWall({ 240.f, 1080.f }); leftWall.setFillColor(sf::Color(40, 40, 40));
+    sf::RectangleShape rightWall({ 240.f, 1080.f }); rightWall.setPosition({ 1680.f, 0.f }); rightWall.setFillColor(sf::Color(40, 40, 40));
 
-    sf::RectangleShape bgBottom(ss(800.f, 300.f));
-    bgBottom.setFillColor(sf::Color(5, 20, 50));
-    bgBottom.setPosition(sp(0.f, 300.f));
+    // UI Texts
+    sf::Text p1Title(font, "PLAYER 1", 35); p1Title.setPosition({ 40.f, 850.f }); p1Title.setFillColor(sf::Color::Blue);
+    sf::Text p1LivesText(font, "Lives: 6", 30); p1LivesText.setPosition({ 40.f, 900.f });
+    sf::Text p1SizeText(font, "Size: 4", 25); p1SizeText.setPosition({ 40.f, 950.f });
+    
+    sf::Text p2Title(font, "PLAYER 2", 35); p2Title.setPosition({ 1700.f, 50.f }); p2Title.setFillColor(sf::Color::Green);
+    sf::Text p2LivesText(font, "Lives: 6", 30); p2LivesText.setPosition({ 1700.f, 100.f });
+    sf::Text p2SizeText(font, "Size: 4", 25); p2SizeText.setPosition({ 1700.f, 150.f });
+    
+    sf::Text centerText(font, "", 50);
+    sf::Text titleText(font, "PADDLE ROYALE", 80); titleText.setPosition({ 650.f, 200.f });
+    sf::Text controlsText(font, "", 30); controlsText.setPosition({ 750.f, 700.f });
+    sf::Text swapText(font, "Press TAB to switch player controls", 25); swapText.setPosition({ 770.f, 900.f }); swapText.setFillColor(sf::Color::Yellow);
 
-    // Helper: draw the shared background every frame
-    auto drawBackground = [&]() {
-        window.draw(bgTop);
-        window.draw(bgBottom);
-        for (const auto& s : stars) window.draw(s);
-    };
+    // --- TITLE MENU BUTTONS ---
+    sf::RectangleShape btnSPRect({ 400.f, 70.f }); btnSPRect.setPosition({ 760.f, 380.f }); btnSPRect.setFillColor(sf::Color(60, 60, 60));
+    sf::Text btnSPText(font, "Single Player Mode", 35); btnSPText.setPosition({ 810.f, 395.f });
 
-    // ----------------------------------------------------------
-    //  AUDIO
-    // ----------------------------------------------------------
-    sf::Music music;
-    bool musicLoaded = music.openFromFile("Snowy.mp3");
-    if (!musicLoaded) musicLoaded = music.openFromFile("music.ogg");
-    if (musicLoaded) { music.setLooping(true); music.setVolume(50.f); music.play(); }
-    bool isMuted = false;
+    sf::RectangleShape btnMPRect({ 400.f, 70.f }); btnMPRect.setPosition({ 760.f, 480.f }); btnMPRect.setFillColor(sf::Color(60, 60, 60));
+    sf::Text btnMPText(font, "Two Player Mode", 35); btnMPText.setPosition({ 825.f, 495.f });
 
-    // ----------------------------------------------------------
-    //  GAME STATE
-    // ----------------------------------------------------------
-    enum class GameState { StartScreen, Settings, Playing, GameOver };
-    GameState gameState = GameState::StartScreen;
+    sf::RectangleShape btnTitleExitRect({ 400.f, 70.f }); btnTitleExitRect.setPosition({ 760.f, 580.f }); btnTitleExitRect.setFillColor(sf::Color(180, 50, 50));
+    sf::Text btnTitleExitText(font, "Exit Game", 35); btnTitleExitText.setPosition({ 875.f, 595.f });
 
-    // ----------------------------------------------------------
-    //  PLAYER MODE
-    // ----------------------------------------------------------
-    int  playerMode    = 2;    // 1 or 2 players — chosen on start screen
-    bool controlsSwapped = false;
+    sf::RectangleShape btnTitleMuteRect({ 140.f, 50.f }); btnTitleMuteRect.setPosition({ 1700.f, 980.f }); btnTitleMuteRect.setFillColor(sf::Color(80, 80, 80));
+    sf::Text btnTitleMuteText(font, "MUTE", 25); btnTitleMuteText.setPosition({ 1735.f, 990.f });
 
-    // ----------------------------------------------------------
-    //  FPS SETTING  (60–120, step 1, controlled by slider)
-    // ----------------------------------------------------------
-    int  targetFPS     = 60;   // Current FPS cap
-    int  minFPS        = 60;
-    int  maxFPS        = 120;
+    // --- PAUSE MENU BUTTONS ---
+    sf::Text pauseText(font, "PAUSED", 45); pauseText.setPosition({ 870.f, 350.f });
+    
+    sf::RectangleShape btnReturnRect({ 550.f, 40.f }); btnReturnRect.setPosition({ 685.f, 430.f }); btnReturnRect.setFillColor(sf::Color(180, 50, 50));
+    sf::Text btnReturnText(font, "RETURN TO TITLE SCREEN", 22); btnReturnText.setPosition({ 805.f, 437.f });
 
-    // ----------------------------------------------------------
-    //  GAME-OVER INFO
-    // ----------------------------------------------------------
-    std::string loserName; // "Player 1" or "Player 2" or "CPU"
+    sf::RectangleShape btnResumeRect({ 350.f, 100.f }); btnResumeRect.setPosition({ 785.f, 500.f }); btnResumeRect.setFillColor(sf::Color(50, 180, 50));
+    sf::Text btnResumeText(font, "RESUME", 50); btnResumeText.setPosition({ 860.f, 515.f });
 
-    // ----------------------------------------------------------
-    //  HELPER: centre a text object horizontally on the screen
-    // ----------------------------------------------------------
-    auto centreH = [&](sf::Text& t, float y) {
-        sf::FloatRect b = t.getLocalBounds();
-        t.setOrigin({b.size.x / 2.f, 0.f});
-        t.setPosition({960.f, y}); // 960 = half of 1920
-    };
+    sf::RectangleShape btnPauseMuteRect({ 250.f, 45.f }); btnPauseMuteRect.setPosition({ 835.f, 630.f }); btnPauseMuteRect.setFillColor(sf::Color(80, 80, 80));
+    sf::Text btnPauseMuteText(font, "MUTE AUDIO", 25); btnPauseMuteText.setPosition({ 880.f, 638.f });
 
-    // ============================================================
-    //  LAMBDA: build control label strings
-    // ============================================================
-    auto makeControlsText = [&](bool swapped) -> std::pair<std::string, std::string> {
-        if (!swapped) return {"P1: LEFT / RIGHT", "P2: A / D"};
-        else          return {"P1: A / D",        "P2: LEFT / RIGHT"};
-    };
+    // --- GAME OVER BUTTONS ---
+    sf::RectangleShape btnPlayAgainRect({ 300.f, 60.f }); btnPlayAgainRect.setPosition({ 810.f, 550.f }); btnPlayAgainRect.setFillColor(sf::Color(50, 180, 50));
+    sf::Text btnPlayAgainText(font, "PLAY AGAIN", 30); btnPlayAgainText.setPosition({ 865.f, 560.f });
 
-    // ============================================================
-    //  ——— START SCREEN ELEMENTS ———
-    // ============================================================
-    sf::Text startTitle(font, "BRICK BREAKER DUO", static_cast<unsigned int>(80 * SY / 1.6f));
-    startTitle.setFillColor(sf::Color(220, 220, 255));
-    startTitle.setStyle(sf::Text::Bold);
-    centreH(startTitle, 100.f * SY);
+    sf::RectangleShape btnGameOverReturnRect({ 450.f, 60.f }); btnGameOverReturnRect.setPosition({ 735.f, 640.f }); btnGameOverReturnRect.setFillColor(sf::Color(180, 50, 50));
+    sf::Text btnGameOverReturnText(font, "RETURN TO TITLE SCREEN", 25); btnGameOverReturnText.setPosition({ 790.f, 655.f });
 
-    sf::RectangleShape startDivider({900.f * SX / 2.4f, 3.f});
-    startDivider.setFillColor(sf::Color(150, 150, 220, 180));
-    startDivider.setOrigin({startDivider.getSize().x / 2.f, 1.f});
-    startDivider.setPosition({960.f, 230.f * SY});
+    Player p1, p2;
+    p1.paddle.setFillColor(sf::Color::Blue); p2.paddle.setFillColor(sf::Color::Green);
+    p1.ball.setRadius(10.f); p1.ball.setOrigin({ 10.f, 10.f }); p1.ball.setFillColor(sf::Color::White);
+    p2.ball.setRadius(10.f); p2.ball.setOrigin({ 10.f, 10.f }); p2.ball.setFillColor(sf::Color::Yellow);
 
-    sf::Text startSubtitle(font, "Choose your mode", static_cast<unsigned int>(28 * SY / 1.6f));
-    startSubtitle.setFillColor(sf::Color(160, 160, 200));
-    centreH(startSubtitle, 245.f * SY);
+    sf::RectangleShape dividingLine({ 1440.f, 3.f });
+    dividingLine.setFillColor(sf::Color::White);
+    dividingLine.setPosition({ 240.f, 540.f });
 
-    // --- 1P / 2P buttons ---
-    // Button backgrounds
-    sf::RectangleShape btn1P(ss(160.f, 55.f));
-    btn1P.setFillColor(sf::Color(40, 80, 180));
-    btn1P.setOutlineThickness(3.f);
-    btn1P.setOutlineColor(sf::Color(100, 150, 255));
-    btn1P.setOrigin({btn1P.getSize().x / 2.f, btn1P.getSize().y / 2.f});
-    btn1P.setPosition({720.f * SX / 2.4f, 340.f * SY});
-
-    sf::RectangleShape btn2P(ss(160.f, 55.f));
-    btn2P.setFillColor(sf::Color(40, 80, 180));
-    btn2P.setOutlineThickness(3.f);
-    btn2P.setOutlineColor(sf::Color(100, 150, 255));
-    btn2P.setOrigin({btn2P.getSize().x / 2.f, btn2P.getSize().y / 2.f});
-    btn2P.setPosition({1080.f * SX / 2.4f, 340.f * SY});
-
-    sf::Text lbl1P(font, "1 PLAYER", static_cast<unsigned int>(22 * SY / 1.6f));
-    lbl1P.setFillColor(sf::Color::White);
-    lbl1P.setStyle(sf::Text::Bold);
-    { sf::FloatRect b = lbl1P.getLocalBounds(); lbl1P.setOrigin({b.size.x/2.f, b.size.y/2.f}); }
-    lbl1P.setPosition(btn1P.getPosition());
-
-    sf::Text lbl2P(font, "2 PLAYERS", static_cast<unsigned int>(22 * SY / 1.6f));
-    lbl2P.setFillColor(sf::Color::White);
-    lbl2P.setStyle(sf::Text::Bold);
-    { sf::FloatRect b = lbl2P.getLocalBounds(); lbl2P.setOrigin({b.size.x/2.f, b.size.y/2.f}); }
-    lbl2P.setPosition(btn2P.getPosition());
-
-    // Controls display on start screen
-    sf::Text startP1Label(font, "", static_cast<unsigned int>(26 * SY / 1.6f));
-    startP1Label.setFillColor(sf::Color(100, 180, 255));
-
-    sf::Text startP2Label(font, "", static_cast<unsigned int>(26 * SY / 1.6f));
-    startP2Label.setFillColor(sf::Color(100, 255, 140));
-
-    sf::Text startSwapHint(font, "[ TAB ] to swap controls", static_cast<unsigned int>(20 * SY / 1.6f));
-    startSwapHint.setFillColor(sf::Color(180, 180, 180));
-    centreH(startSwapHint, 460.f * SY);
-
-    // Pulsing prompt
-    sf::Text startPrompt(font, "Press  ENTER  or  SPACE  to  Start", static_cast<unsigned int>(30 * SY / 1.6f));
-    startPrompt.setFillColor(sf::Color(255, 220, 80));
-    startPrompt.setStyle(sf::Text::Bold);
-    centreH(startPrompt, 530.f * SY);
-
-    // Mute hint
-    sf::Text startMuteHint(font, "[ M ]  Mute / Unmute", static_cast<unsigned int>(18 * SY / 1.6f));
-    startMuteHint.setFillColor(sf::Color(160, 160, 160));
-    { sf::FloatRect b = startMuteHint.getLocalBounds();
-      startMuteHint.setOrigin({b.size.x, 0.f});
-      startMuteHint.setPosition({1900.f, 920.f * SY}); }
-
-    // Settings button on start screen
-    sf::RectangleShape btnSettings(ss(140.f, 45.f));
-    btnSettings.setFillColor(sf::Color(50, 50, 100));
-    btnSettings.setOutlineThickness(2.f);
-    btnSettings.setOutlineColor(sf::Color(120, 120, 200));
-    btnSettings.setPosition({20.f, 20.f});
-
-    sf::Text lblSettings(font, "SETTINGS", static_cast<unsigned int>(20 * SY / 1.6f));
-    lblSettings.setFillColor(sf::Color(200, 200, 255));
-    { sf::FloatRect b = lblSettings.getLocalBounds();
-      lblSettings.setOrigin({b.size.x/2.f, b.size.y/2.f});
-      lblSettings.setPosition({btnSettings.getPosition().x + btnSettings.getSize().x/2.f,
-                                btnSettings.getPosition().y + btnSettings.getSize().y/2.f}); }
-
-    sf::Clock pulseClock;
-
-    // ============================================================
-    //  ——— SETTINGS SCREEN ELEMENTS ———
-    // ============================================================
-    sf::Text settingsTitle(font, "SETTINGS", static_cast<unsigned int>(60 * SY / 1.6f));
-    settingsTitle.setFillColor(sf::Color(220, 220, 255));
-    settingsTitle.setStyle(sf::Text::Bold);
-    centreH(settingsTitle, 80.f * SY);
-
-    // FPS slider track
-    float sliderTrackX     = 560.f * SX / 2.4f;  // left edge X
-    float sliderTrackY     = 340.f * SY;
-    float sliderTrackW     = 800.f * SX / 2.4f;
-    float sliderTrackH     =   8.f * SY;
-
-    sf::RectangleShape sliderTrack({sliderTrackW, sliderTrackH});
-    sliderTrack.setFillColor(sf::Color(80, 80, 140));
-    sliderTrack.setOutlineThickness(2.f);
-    sliderTrack.setOutlineColor(sf::Color(150, 150, 220));
-    sliderTrack.setPosition({sliderTrackX, sliderTrackY});
-
-    // Slider knob (draggable circle)
-    float sliderKnobRadius = 18.f * SY / 1.6f;
-    sf::CircleShape sliderKnob(sliderKnobRadius);
-    sliderKnob.setFillColor(sf::Color(100, 180, 255));
-    sliderKnob.setOutlineThickness(3.f);
-    sliderKnob.setOutlineColor(sf::Color::White);
-    sliderKnob.setOrigin({sliderKnobRadius, sliderKnobRadius});
-
-    // Helper: reposition knob based on current targetFPS
-    auto updateSliderKnob = [&]() {
-        float t = float(targetFPS - minFPS) / float(maxFPS - minFPS);
-        float knobX = sliderTrackX + t * sliderTrackW;
-        float knobY = sliderTrackY + sliderTrackH / 2.f;
-        sliderKnob.setPosition({knobX, knobY});
-    };
-    updateSliderKnob();
-
-    bool sliderDragging = false; // true while mouse button is held on knob
-
-    sf::Text fpsLabel(font, "", static_cast<unsigned int>(28 * SY / 1.6f));
-    fpsLabel.setFillColor(sf::Color(220, 220, 255));
-    centreH(fpsLabel, 280.f * SY);
-
-    sf::Text fpsMinLabel(font, "60", static_cast<unsigned int>(22 * SY / 1.6f));
-    fpsMinLabel.setFillColor(sf::Color(160, 160, 160));
-    fpsMinLabel.setPosition({sliderTrackX - 40.f, sliderTrackY - 6.f});
-
-    sf::Text fpsMaxLabel(font, "120", static_cast<unsigned int>(22 * SY / 1.6f));
-    fpsMaxLabel.setFillColor(sf::Color(160, 160, 160));
-    fpsMaxLabel.setPosition({sliderTrackX + sliderTrackW + 10.f, sliderTrackY - 6.f});
-
-    // Helper: refresh fpsLabel string
-    auto updateFpsLabel = [&]() {
-        fpsLabel.setString("FPS Cap:  " + std::to_string(targetFPS));
-        centreH(fpsLabel, 280.f * SY);
-    };
-    updateFpsLabel();
-
-    // Back button (settings → start screen)
-    sf::RectangleShape btnBack(ss(140.f, 45.f));
-    btnBack.setFillColor(sf::Color(80, 30, 30));
-    btnBack.setOutlineThickness(2.f);
-    btnBack.setOutlineColor(sf::Color(220, 80, 80));
-    btnBack.setPosition({20.f, 20.f});
-
-    sf::Text lblBack(font, "< BACK", static_cast<unsigned int>(20 * SY / 1.6f));
-    lblBack.setFillColor(sf::Color(255, 160, 160));
-    { sf::FloatRect b = lblBack.getLocalBounds();
-      lblBack.setOrigin({b.size.x/2.f, b.size.y/2.f});
-      lblBack.setPosition({btnBack.getPosition().x + btnBack.getSize().x/2.f,
-                            btnBack.getPosition().y + btnBack.getSize().y/2.f}); }
-
-    // ============================================================
-    //  ——— IN-GAME HUD ELEMENTS ———
-    // ============================================================
-    sf::Text titleText(font, "BRICK BREAKER DUO", static_cast<unsigned int>(36 * SY / 1.6f));
-    titleText.setFillColor(sf::Color(220, 220, 255));
-    titleText.setStyle(sf::Text::Bold);
-    centreH(titleText, 4.f * SY);
-
-    sf::Text p1ControlsText(font, "", static_cast<unsigned int>(18 * SY / 1.6f));
-    p1ControlsText.setFillColor(sf::Color(100, 180, 255));
-    p1ControlsText.setPosition(sp(8.f, 575.f));
-
-    sf::Text p2ControlsText(font, "", static_cast<unsigned int>(18 * SY / 1.6f));
-    p2ControlsText.setFillColor(sf::Color(100, 255, 140));
-    p2ControlsText.setPosition(sp(8.f, 560.f));
-
-    sf::Text swapHintText(font, "[TAB] Swap Controls", static_cast<unsigned int>(16 * SY / 1.6f));
-    swapHintText.setFillColor(sf::Color(180, 180, 180));
-    swapHintText.setPosition(sp(8.f, 545.f));
-
-    sf::Text muteText(font, "[M] Mute", static_cast<unsigned int>(16 * SY / 1.6f));
-    muteText.setFillColor(sf::Color(180, 180, 180));
-    { sf::FloatRect b = muteText.getLocalBounds();
-      muteText.setOrigin({b.size.x, 0.f});
-      muteText.setPosition(sp(792.f, 4.f)); }
-
-    sf::Text muteIndicator(font, "", static_cast<unsigned int>(16 * SY / 1.6f));
-    muteIndicator.setFillColor(sf::Color(255, 80, 80));
-    muteIndicator.setPosition(sp(680.f, 18.f));
-
-    // CPU label (shown top-centre in 1-player mode)
-    sf::Text cpuLabel(font, "CPU", static_cast<unsigned int>(22 * SY / 1.6f));
-    cpuLabel.setFillColor(sf::Color(255, 180, 80));
-    { sf::FloatRect b = cpuLabel.getLocalBounds();
-      cpuLabel.setOrigin({b.size.x/2.f, 0.f});
-      cpuLabel.setPosition({960.f, 30.f * SY}); }
-
-    // ============================================================
-    //  UNIFIED CONTROLS UPDATE LAMBDA
-    // ============================================================
-    auto updateControlsDisplay = [&]() {
-        auto [p1, p2] = makeControlsText(controlsSwapped);
-        p1ControlsText.setString(p1);
-        p2ControlsText.setString(p2);
-
-        startP1Label.setString(p1);
-        { sf::FloatRect b = startP1Label.getLocalBounds();
-          startP1Label.setOrigin({b.size.x/2.f, 0.f});
-          startP1Label.setPosition({960.f, 390.f * SY}); }
-
-        startP2Label.setString(p2);
-        { sf::FloatRect b = startP2Label.getLocalBounds();
-          startP2Label.setOrigin({b.size.x/2.f, 0.f});
-          startP2Label.setPosition({960.f, 425.f * SY}); }
-    };
-    updateControlsDisplay();
-
-    // Helper: highlight the selected mode button
-    auto updateModeButtons = [&]() {
-        btn1P.setFillColor(playerMode == 1 ? sf::Color(20, 120, 255) : sf::Color(40, 80, 180));
-        btn2P.setFillColor(playerMode == 2 ? sf::Color(20, 120, 255) : sf::Color(40, 80, 180));
-        btn1P.setOutlineColor(playerMode == 1 ? sf::Color::White : sf::Color(100, 150, 255));
-        btn2P.setOutlineColor(playerMode == 2 ? sf::Color::White : sf::Color(100, 150, 255));
-    };
-    updateModeButtons();
-
-    // ============================================================
-    //  ——— GAME-OVER SCREEN ELEMENTS ———
-    // ============================================================
-    sf::Text gameOverTitle(font, "", static_cast<unsigned int>(60 * SY / 1.6f));
-    gameOverTitle.setFillColor(sf::Color(255, 80, 80));
-    gameOverTitle.setStyle(sf::Text::Bold);
-
-    sf::Text gameOverSub(font, "", static_cast<unsigned int>(30 * SY / 1.6f));
-    gameOverSub.setFillColor(sf::Color(220, 180, 80));
-
-    // Try Again button
-    sf::RectangleShape btnTryAgain(ss(200.f, 60.f));
-    btnTryAgain.setFillColor(sf::Color(30, 120, 60));
-    btnTryAgain.setOutlineThickness(3.f);
-    btnTryAgain.setOutlineColor(sf::Color(80, 220, 120));
-    btnTryAgain.setOrigin({btnTryAgain.getSize().x/2.f, btnTryAgain.getSize().y/2.f});
-    btnTryAgain.setPosition({700.f * SX / 2.4f, 500.f * SY});
-
-    sf::Text lblTryAgain(font, "TRY AGAIN", static_cast<unsigned int>(26 * SY / 1.6f));
-    lblTryAgain.setFillColor(sf::Color::White);
-    lblTryAgain.setStyle(sf::Text::Bold);
-    { sf::FloatRect b = lblTryAgain.getLocalBounds();
-      lblTryAgain.setOrigin({b.size.x/2.f, b.size.y/2.f});
-      lblTryAgain.setPosition(btnTryAgain.getPosition()); }
-
-    // Main Menu button
-    sf::RectangleShape btnMainMenu(ss(200.f, 60.f));
-    btnMainMenu.setFillColor(sf::Color(100, 40, 140));
-    btnMainMenu.setOutlineThickness(3.f);
-    btnMainMenu.setOutlineColor(sf::Color(200, 100, 255));
-    btnMainMenu.setOrigin({btnMainMenu.getSize().x/2.f, btnMainMenu.getSize().y/2.f});
-    btnMainMenu.setPosition({1100.f * SX / 2.4f, 500.f * SY});
-
-    sf::Text lblMainMenu(font, "MAIN MENU", static_cast<unsigned int>(26 * SY / 1.6f));
-    lblMainMenu.setFillColor(sf::Color::White);
-    lblMainMenu.setStyle(sf::Text::Bold);
-    { sf::FloatRect b = lblMainMenu.getLocalBounds();
-      lblMainMenu.setOrigin({b.size.x/2.f, b.size.y/2.f});
-      lblMainMenu.setPosition(btnMainMenu.getPosition()); }
-
-    // ============================================================
-    //  ——— GAME OBJECTS ———
-    // ============================================================
-
-    // --- Paddles ---
-    sf::RectangleShape paddle(ss(100.f, 20.f));
-    paddle.setFillColor(sf::Color(60, 120, 255));
-    paddle.setOrigin({paddle.getSize().x/2.f, paddle.getSize().y/2.f});
-    paddle.setPosition(sp(400.f, 550.f));
-
-    sf::RectangleShape paddle2(ss(100.f, 20.f));
-    paddle2.setFillColor(sf::Color(60, 220, 100));
-    paddle2.setOrigin({paddle2.getSize().x/2.f, paddle2.getSize().y/2.f});
-    paddle2.setPosition(sp(400.f, 50.f));
-
-    // --- Dividing line ---
-    sf::RectangleShape dividingLine(ss(800.f, 3.f));
-    dividingLine.setFillColor(sf::Color(200, 200, 200, 160));
-    dividingLine.setPosition(sp(0.f, 300.f));
-
-    // --- Ball 1 (P1, white) ---
-    float ballR = 10.f * SX / 2.4f;
-    sf::CircleShape ball(ballR);
-    ball.setFillColor(sf::Color::White);
-    ball.setOrigin({ballR, ballR});
-    ball.setPosition(sp(400.f, 530.f));
-    sf::Vector2f ballVelocity{4.f * SX / 2.4f, -4.f * SY / 1.6f};
-
-    // --- Ball 2 (P2 / CPU, yellow) ---
-    sf::CircleShape ball2(ballR);
-    ball2.setFillColor(sf::Color::Yellow);
-    ball2.setOrigin({ballR, ballR});
-    ball2.setPosition(sp(400.f, 70.f));
-    sf::Vector2f ballVelocity2{4.f * SX / 2.4f, 4.f * SY / 1.6f};
-
-    // --- Bricks ---
-    struct Brick {
-        sf::RectangleShape shape;
-        bool destroyed = false;
-    };
     std::vector<Brick> bricks;
+    sf::Clock waitClock;
+    float countdownTime = 60.f;
 
-    std::vector<sf::Color> topColors    = {sf::Color::Green, sf::Color::Green, sf::Color::Red, sf::Color::Red};
-    std::vector<sf::Color> bottomColors = {sf::Color::Green, sf::Color::Green, sf::Color::Red, sf::Color::Red};
+    int activePlayer = 1;
+    bool faceoffBallLaunched = false;
+    float faceoffPaddleSpeed = 12.f; 
 
-    std::random_device rd;
-    std::mt19937 g(rd());
-    std::shuffle(topColors.begin(),    topColors.end(),    g);
-    std::shuffle(bottomColors.begin(), bottomColors.end(), g);
-
-    int topIndex = 0, bottomIndex = 0;
-
-    // Helper: (re)build the brick grid — called at start and on Try Again
-    auto buildBricks = [&]() {
-        bricks.clear();
-        topIndex = 0; bottomIndex = 0;
-        std::shuffle(topColors.begin(),    topColors.end(),    g);
-        std::shuffle(bottomColors.begin(), bottomColors.end(), g);
-
-        for (int i = 0; i < 8; ++i) {
-            for (int j = 0; j < 6; ++j) {
-                Brick b;
-                b.shape.setSize(ss(90.f, 30.f));
-                b.shape.setFillColor(sf::Color(200, 200, 200));
-
-                bool isTop = (j < 3);
-                int  row   = isTop ? j : j - 3;
-
-                bool isSpecial = false;
-                if (row == 1 && (i == 0 || i == 7)) isSpecial = true;
-                if (row == 0 &&  i == 3)             isSpecial = true;
-                if (row == 2 &&  i == 3)             isSpecial = true;
-
-                if (isSpecial) {
-                    if (isTop) b.shape.setFillColor(topColors[topIndex++]);
-                    else       b.shape.setFillColor(bottomColors[bottomIndex++]);
-                }
-
-                b.shape.setOutlineThickness(2.f);
-                b.shape.setOutlineColor(sf::Color::Black);
-
-                if (j < 3)
-                    b.shape.setPosition(sp(i * 100.f + 5.f, j * 35.f + 180.f));
-                else
-                    b.shape.setPosition(sp(i * 100.f + 5.f, (j - 3) * 35.f + 350.f));
-
-                bricks.push_back(b);
-            }
-        }
+    // Helper to toggle audio state
+    auto toggleAudio = [&]() {
+        isMuted = !isMuted;
+        bgMusic.setVolume(isMuted ? 0.f : 50.f);
+        btnTitleMuteText.setString(isMuted ? "UNMUTE" : "MUTE");
+        btnPauseMuteText.setString(isMuted ? "UNMUTE AUDIO" : "MUTE AUDIO");
     };
-    buildBricks();
 
-    // Helper: reset ball & paddle positions for a fresh game
     auto resetGame = [&]() {
-        paddle.setPosition(sp(400.f, 550.f));
-        paddle2.setPosition(sp(400.f, 50.f));
-        ball.setPosition(sp(400.f, 530.f));
-        ball2.setPosition(sp(400.f, 70.f));
-        ballVelocity  = {4.f * SX / 2.4f, -4.f * SY / 1.6f};
-        ballVelocity2 = {4.f * SX / 2.4f,  4.f * SY / 1.6f};
-        buildBricks();
+        p1.sizeLevel = 4; p1.updateSize(0); 
+        p1.resetBall(1020.f, false); 
+        p1.bricksFinished = false;
+
+        if (isSinglePlayer) {
+            p1.lives = 3;
+        } else {
+            p1.lives = 6; p2.lives = 6; 
+            p2.sizeLevel = 4; p2.updateSize(0);
+            p2.resetBall(60.f, true);    
+            p2.bricksFinished = false;
+        }
+        
+        bricks.clear();
+        for (int i = 0; i < 12; ++i) {
+            for (int j = 0; j < 12; ++j) { 
+                Brick b;
+                b.shape.setSize({ 120.f, 35.f });
+                b.shape.setOutlineThickness(-3.f);
+                b.shape.setOutlineColor(sf::Color(25, 25, 25)); 
+
+                if (isSinglePlayer) {
+                    b.isPlayer1Side = true; 
+                    int row = j;
+                    bool isSpecial = false;
+                    if ((row == 1 || row == 7) && (i == 2 || i == 9)) isSpecial = true; 
+                    if ((row == 3 || row == 9) && i == 5) isSpecial = true;              
+                    if ((row == 4 || row == 10) && (i == 3 || i == 8)) isSpecial = true; 
+
+                    if (isSpecial) {
+                        b.type = (rand() % 2 == 0) ? 1 : 2; 
+                        b.shape.setFillColor((b.type == 1) ? sf::Color::Red : sf::Color::Green);
+                    } else {
+                        b.shape.setFillColor(sf::Color::White);
+                    }
+                    b.shape.setPosition({ i * 120.f + 240.f, j * 35.f + 100.f }); 
+                    bricks.push_back(b);
+                } else {
+                    b.isPlayer1Side = (j >= 6);
+                    int row = b.isPlayer1Side ? (j - 6) : j;
+                    bool isSpecial = false;
+                    if (row == 1 && (i == 2 || i == 9)) isSpecial = true; 
+                    if (row == 3 && i == 5) isSpecial = true;              
+                    if (row == 4 && (i == 3 || i == 8)) isSpecial = true; 
+
+                    if (isSpecial) {
+                        b.type = (rand() % 2 == 0) ? 1 : 2; 
+                        b.shape.setFillColor((b.type == 1) ? sf::Color::Red : sf::Color::Green);
+                    } else {
+                        b.shape.setFillColor(sf::Color::White);
+                    }
+
+                    if (!b.isPlayer1Side) {
+                        b.shape.setPosition({ i * 120.f + 240.f, j * 35.f + 300.f }); 
+                    } else {
+                        b.shape.setPosition({ i * 120.f + 240.f, (j - 6) * 35.f + 570.f }); 
+                    }
+                    bricks.push_back(b);
+                }
+            }
+        }
     };
 
-    // Clamp helpers for paddle X boundaries
-    const float paddleHalfW = paddle.getSize().x / 2.f;
-    const float paddleMinX  = paddleHalfW + 10.f * SX / 2.4f;
-    const float paddleMaxX  = 1920.f - paddleHalfW - 10.f * SX / 2.4f;
-
-    // ============================================================
-    //  MAIN GAME LOOP
-    // ============================================================
-    while (window.isOpen()) {
-
-        // ----------------------------------------------------------
-        //  EVENT HANDLING  (shared across all states)
-        // ----------------------------------------------------------
-        while (const std::optional event = window.pollEvent()) {
-
-            if (event->is<sf::Event::Closed>())
-                window.close();
-
-            // ---- Mouse button press ----
-            if (const auto* mb = event->getIf<sf::Event::MouseButtonPressed>()) {
-                if (mb->button == sf::Mouse::Button::Left) {
-                    sf::Vector2f mp(static_cast<float>(mb->position.x),
-                                    static_cast<float>(mb->position.y));
-
-                    // --- Start screen clicks ---
-                    if (gameState == GameState::StartScreen) {
-                        // 1P button
-                        if (btn1P.getGlobalBounds().contains(mp)) {
-                            playerMode = 1; updateModeButtons();
-                        }
-                        // 2P button
-                        if (btn2P.getGlobalBounds().contains(mp)) {
-                            playerMode = 2; updateModeButtons();
-                        }
-                        // Settings button
-                        if (btnSettings.getGlobalBounds().contains(mp)) {
-                            gameState = GameState::Settings;
-                        }
-                    }
-
-                    // --- Settings screen clicks ---
-                    if (gameState == GameState::Settings) {
-                        // Back button
-                        if (btnBack.getGlobalBounds().contains(mp)) {
-                            gameState = GameState::StartScreen;
-                        }
-                        // Start dragging slider knob
-                        if (sliderKnob.getGlobalBounds().contains(mp)) {
-                            sliderDragging = true;
-                        }
-                    }
-
-                    // --- Game-over screen clicks ---
-                    if (gameState == GameState::GameOver) {
-                        if (btnTryAgain.getGlobalBounds().contains(mp)) {
-                            resetGame();
-                            gameState = GameState::Playing;
-                        }
-                        if (btnMainMenu.getGlobalBounds().contains(mp)) {
-                            resetGame();
-                            gameState = GameState::StartScreen;
-                        }
-                    }
-                }
-            }
-
-            // ---- Mouse button release ----
-            if (const auto* mr = event->getIf<sf::Event::MouseButtonReleased>()) {
-                if (mr->button == sf::Mouse::Button::Left)
-                    sliderDragging = false;
-            }
-
-            // ---- Mouse move — drag slider ----
-            if (const auto* mm = event->getIf<sf::Event::MouseMoved>()) {
-                if (sliderDragging && gameState == GameState::Settings) {
-                    float mx = static_cast<float>(mm->position.x);
-                    float t  = (mx - sliderTrackX) / sliderTrackW;
-                    t = std::clamp(t, 0.f, 1.f);
-                    targetFPS = minFPS + static_cast<int>(std::round(t * float(maxFPS - minFPS)));
-                    window.setFramerateLimit(static_cast<unsigned int>(targetFPS));
-                    updateSliderKnob();
-                    updateFpsLabel();
-                }
-            }
-
-            // ---- Key presses ----
-            if (const auto* ke = event->getIf<sf::Event::KeyPressed>()) {
-
-                // M — mute, works everywhere
-                if (ke->code == sf::Keyboard::Key::M) {
-                    isMuted = !isMuted;
-                    if (musicLoaded) music.setVolume(isMuted ? 0.f : 50.f);
-                    muteIndicator.setString(isMuted ? "MUTED" : "");
-                }
-
-                // TAB — swap controls on start screen only
-                if (ke->code == sf::Keyboard::Key::Tab &&
-                    gameState == GameState::StartScreen)
-                {
-                    controlsSwapped = !controlsSwapped;
-                    updateControlsDisplay();
-                }
-
-                // ENTER / SPACE — start game from start screen
-                if (gameState == GameState::StartScreen) {
-                    if (ke->code == sf::Keyboard::Key::Enter ||
-                        ke->code == sf::Keyboard::Key::Space)
-                    {
-                        resetGame();
-                        gameState = GameState::Playing;
-                    }
-                }
-            }
-        }
-
-        // ==========================================================
-        //  STATE: START SCREEN
-        // ==========================================================
-        if (gameState == GameState::StartScreen) {
-            float elapsed = pulseClock.getElapsedTime().asSeconds();
-            float alpha   = 160.f + 95.f * std::sin(elapsed * 3.f);
-            startPrompt.setFillColor(sf::Color(255, 220, 80, static_cast<uint8_t>(alpha)));
-
-            window.clear(sf::Color(8, 8, 24));
-            drawBackground();
-
-            if (fontLoaded) {
-                window.draw(startTitle);
-                window.draw(startDivider);
-                window.draw(startSubtitle);
-                window.draw(btn1P);   window.draw(lbl1P);
-                window.draw(btn2P);   window.draw(lbl2P);
-                window.draw(startP1Label);
-                window.draw(startP2Label);
-                window.draw(startSwapHint);
-                window.draw(startPrompt);
-                window.draw(startMuteHint);
-                window.draw(btnSettings); window.draw(lblSettings);
-            }
-            window.display();
-            continue;
-        }
-
-        // ==========================================================
-        //  STATE: SETTINGS
-        // ==========================================================
-        if (gameState == GameState::Settings) {
-            window.clear(sf::Color(8, 8, 24));
-            drawBackground();
-
-            if (fontLoaded) {
-                window.draw(settingsTitle);
-                window.draw(fpsLabel);
-                window.draw(fpsMinLabel);
-                window.draw(fpsMaxLabel);
-                window.draw(sliderTrack);
-                window.draw(sliderKnob);
-                window.draw(btnBack); window.draw(lblBack);
-            }
-            window.display();
-            continue;
-        }
-
-        // ==========================================================
-        //  STATE: GAME OVER
-        // ==========================================================
-        if (gameState == GameState::GameOver) {
-            float elapsed = pulseClock.getElapsedTime().asSeconds();
-            float alpha   = 160.f + 95.f * std::sin(elapsed * 3.f);
-
-            // Animate the subtitle (Try Again / Main Menu prompt)
-            gameOverSub.setFillColor(sf::Color(220, 180, 80, static_cast<uint8_t>(alpha)));
-
-            window.clear(sf::Color(8, 8, 24));
-            drawBackground();
-
-            if (fontLoaded) {
-                window.draw(gameOverTitle);
-                window.draw(gameOverSub);
-                window.draw(btnTryAgain);  window.draw(lblTryAgain);
-                window.draw(btnMainMenu);  window.draw(lblMainMenu);
-            }
-            window.display();
-            continue;
-        }
-
-        // ==========================================================
-        //  STATE: PLAYING
-        // ==========================================================
-
-        // --- Resolve key bindings based on swap state ---
-        sf::Keyboard::Key p1Left  = controlsSwapped ? sf::Keyboard::Key::A    : sf::Keyboard::Key::Left;
-        sf::Keyboard::Key p1Right = controlsSwapped ? sf::Keyboard::Key::D    : sf::Keyboard::Key::Right;
-        sf::Keyboard::Key p2Left  = controlsSwapped ? sf::Keyboard::Key::Left : sf::Keyboard::Key::A;
-        sf::Keyboard::Key p2Right = controlsSwapped ? sf::Keyboard::Key::Right: sf::Keyboard::Key::D;
-
-        // --- Player 1 paddle input ---
-        if (sf::Keyboard::isKeyPressed(p1Left)  && paddle.getPosition().x > paddleMinX)
-            paddle.move({-7.f * SX / 2.4f, 0.f});
-        if (sf::Keyboard::isKeyPressed(p1Right) && paddle.getPosition().x < paddleMaxX)
-            paddle.move({ 7.f * SX / 2.4f, 0.f});
-
-        // --- Player 2 paddle input  OR  simple CPU AI ---
-        if (playerMode == 2) {
-            // Human controls
-            if (sf::Keyboard::isKeyPressed(p2Left)  && paddle2.getPosition().x > paddleMinX)
-                paddle2.move({-7.f * SX / 2.4f, 0.f});
-            if (sf::Keyboard::isKeyPressed(p2Right) && paddle2.getPosition().x < paddleMaxX)
-                paddle2.move({ 7.f * SX / 2.4f, 0.f});
+    auto setFaceoffTurn = [&](int turnPlayer) {
+        activePlayer = turnPlayer;
+        faceoffBallLaunched = false;
+        if (activePlayer == 1) {
+            p1.paddle.setPosition({ 960.f, 1020.f });
+            p2.paddle.setPosition({ static_cast<float>(300 + rand() % 1300), 60.f });
+            p1.ball.setPosition({ p1.paddle.getPosition().x, 1000.f });
         } else {
-            // CPU: track ball 2 at a capped speed
-            float cpuSpeed = 5.f * SX / 2.4f;
-            float diff     = ball2.getPosition().x - paddle2.getPosition().x;
-            if (diff >  cpuSpeed) paddle2.move({ cpuSpeed, 0.f});
-            else if (diff < -cpuSpeed) paddle2.move({-cpuSpeed, 0.f});
-            // Clamp CPU paddle to screen
-            float cx = paddle2.getPosition().x;
-            if (cx < paddleMinX) paddle2.setPosition({paddleMinX, paddle2.getPosition().y});
-            if (cx > paddleMaxX) paddle2.setPosition({paddleMaxX, paddle2.getPosition().y});
+            p2.paddle.setPosition({ 960.f, 60.f });
+            p1.paddle.setPosition({ static_cast<float>(300 + rand() % 1300), 1020.f });
+            p2.ball.setPosition({ p2.paddle.getPosition().x, 80.f });
+        }
+    };
+
+    // ================= GAME LOOP =================
+    while (window.isOpen()) {
+        // -------- EVENT HANDLING --------
+        while (const std::optional event = window.pollEvent()) {
+            if (event->is<sf::Event::Closed>()) window.close();
+
+            if (const auto* mouseEvent = event->getIf<sf::Event::MouseButtonPressed>()) {
+                if (mouseEvent->button == sf::Mouse::Button::Left) {
+                    sf::Vector2f mousePos = window.mapPixelToCoords(mouseEvent->position);
+
+                    if (gameState == State::TITLE) {
+                        if (btnSPRect.getGlobalBounds().contains(mousePos)) {
+                            isSinglePlayer = true; p2.isBot = false; resetGame(); gameState = State::BREAKER;
+                        }
+                        if (btnMPRect.getGlobalBounds().contains(mousePos)) {
+                            isSinglePlayer = false; p2.isBot = false; resetGame(); gameState = State::BREAKER;
+                        }
+                        // Check for exit click
+                        if (btnTitleExitRect.getGlobalBounds().contains(mousePos)) {
+                            window.close();
+                        }
+                        if (btnTitleMuteRect.getGlobalBounds().contains(mousePos)) {
+                            toggleAudio();
+                        }
+                    } else if (isPaused) {
+                        if (btnReturnRect.getGlobalBounds().contains(mousePos)) {
+                            isPaused = false; gameState = State::TITLE;
+                        }
+                        if (btnResumeRect.getGlobalBounds().contains(mousePos)) {
+                            isPaused = false;
+                        }
+                        if (btnPauseMuteRect.getGlobalBounds().contains(mousePos)) {
+                            toggleAudio();
+                        }
+                    } else if (gameState == State::GAME_OVER) {
+                        if (btnPlayAgainRect.getGlobalBounds().contains(mousePos)) {
+                            resetGame(); gameState = State::BREAKER;
+                        }
+                        if (btnGameOverReturnRect.getGlobalBounds().contains(mousePos)) {
+                            gameState = State::TITLE;
+                        }
+                    }
+                }
+            }
+
+            if (event->is<sf::Event::KeyPressed>()) {
+                auto code = event->getIf<sf::Event::KeyPressed>()->code;
+
+                if (code == sf::Keyboard::Key::Escape && gameState != State::TITLE) {
+                    isPaused = !isPaused;
+                }
+
+                if (gameState == State::TITLE) {
+                    if (code == sf::Keyboard::Key::Tab) controlsSwapped = !controlsSwapped;
+                }
+
+                if (gameState == State::FACEOFF && !isPaused && !faceoffBallLaunched) {
+                    if ((activePlayer == 1 && code == sf::Keyboard::Key::Space) ||
+                        (activePlayer == 2 && code == sf::Keyboard::Key::Space && !p2.isBot)) {
+                        faceoffBallLaunched = true;
+                        if (activePlayer == 1) p1.ballVel = { 0.f, -15.f }; 
+                        else p2.ballVel = { 0.f, 15.f };
+                    }
+                }
+
+                if (gameState == State::GAME_OVER) {
+                    if (code == sf::Keyboard::Key::Enter) { gameState = State::TITLE; }
+                    if (code == sf::Keyboard::Key::Space) { resetGame(); gameState = State::BREAKER; }
+                }
+            }
         }
 
-        // --- Move balls ---
-        ball.move(ballVelocity);
-        ball2.move(ballVelocity2);
+        // -------- STATE LOGIC --------
+        if (gameState == State::TITLE) {
+            std::string p1Ctrl = controlsSwapped ? "A/D keys" : "Left/Right arrow keys";
+            std::string p2Ctrl = controlsSwapped ? "Left/Right arrow keys" : "A/D keys";
+            controlsText.setString("Movement:\nPlayer 1: " + p1Ctrl + "\nPlayer 2: " + p2Ctrl + "\nShoot (Faceoff): Spacebar");
+            
+            sf::Vector2f mPos = window.mapPixelToCoords(sf::Mouse::getPosition(window));
+            btnSPRect.setFillColor(btnSPRect.getGlobalBounds().contains(mPos) ? sf::Color(90, 90, 90) : sf::Color(60, 60, 60));
+            btnMPRect.setFillColor(btnMPRect.getGlobalBounds().contains(mPos) ? sf::Color(90, 90, 90) : sf::Color(60, 60, 60));
+            
+            // Hover effect for exit button
+            btnTitleExitRect.setFillColor(btnTitleExitRect.getGlobalBounds().contains(mPos) ? sf::Color(210, 70, 70) : sf::Color(180, 50, 50));
+            
+            btnTitleMuteRect.setFillColor(btnTitleMuteRect.getGlobalBounds().contains(mPos) ? sf::Color(110, 110, 110) : sf::Color(80, 80, 80));
 
-        sf::Vector2f pos  = ball.getPosition();
-        sf::Vector2f pos2 = ball2.getPosition();
+            window.clear(sf::Color(8, 8, 16)); 
+            for (auto& star : stars) {
+                if (std::rand() % 100 < 2) {
+                    int alpha = star.getFillColor().a + (std::rand() % 50 - 25);
+                    if (alpha < 50) alpha = 50; if (alpha > 255) alpha = 255;
+                    star.setFillColor(sf::Color(255, 255, 255, alpha));
+                }
+                window.draw(star);
+            }
 
-        // --- Ball 1 wall collisions ---
-        if (pos.x < 10.f * SX/2.4f || pos.x > 1910.f * SX/2.4f)
-            ballVelocity.x = -ballVelocity.x;
-        if (pos.y < 10.f * SY/1.6f)
-            ballVelocity.y = -ballVelocity.y;
-
-        // Ball 1 exits bottom → Player 1 loses
-        if (pos.y > 960.f) {
-            loserName = "Player 1";
-            gameOverTitle.setString(loserName + " Lost!");
-            gameOverSub.setString("Choose an option below");
-            centreH(gameOverTitle, 200.f * SY);
-            centreH(gameOverSub,   310.f * SY);
-            pulseClock.restart();
-            gameState = GameState::GameOver;
+            window.draw(titleText); 
+            window.draw(btnSPRect); window.draw(btnSPText);
+            window.draw(btnMPRect); window.draw(btnMPText);
+            window.draw(btnTitleExitRect); window.draw(btnTitleExitText);
+            window.draw(btnTitleMuteRect); window.draw(btnTitleMuteText);
+            window.draw(controlsText); window.draw(swapText);
+            window.display();
             continue;
         }
 
-        // --- Ball 2 wall collisions ---
-        if (pos2.x < 10.f * SX/2.4f || pos2.x > 1910.f * SX/2.4f)
-            ballVelocity2.x = -ballVelocity2.x;
-        if (pos2.y > 950.f * SY/1.6f)
-            ballVelocity2.y = -ballVelocity2.y;
+        if (!isPaused) {
+            sf::Keyboard::Key p1Left = controlsSwapped ? sf::Keyboard::Key::A : sf::Keyboard::Key::Left;
+            sf::Keyboard::Key p1Right = controlsSwapped ? sf::Keyboard::Key::D : sf::Keyboard::Key::Right;
+            sf::Keyboard::Key p2Left = controlsSwapped ? sf::Keyboard::Key::Left : sf::Keyboard::Key::A;
+            sf::Keyboard::Key p2Right = controlsSwapped ? sf::Keyboard::Key::Right : sf::Keyboard::Key::D;
 
-        // Ball 2 exits top → Player 2 (or CPU) loses
-        if (pos2.y < 0.f) {
-            loserName = (playerMode == 1) ? "CPU" : "Player 2";
-            gameOverTitle.setString(loserName + " Lost!");
-            gameOverSub.setString("Choose an option below");
-            centreH(gameOverTitle, 200.f * SY);
-            centreH(gameOverSub,   310.f * SY);
-            pulseClock.restart();
-            gameState = GameState::GameOver;
-            continue;
+            if (gameState == State::BREAKER || gameState == State::WAITING) {
+                // P1 Movement
+                if (!p1.bricksFinished || gameState == State::WAITING) {
+                    if (sf::Keyboard::isKeyPressed(p1Left) && p1.paddle.getPosition().x > 240.f + p1.getCurrentWidth() / 2.f) {
+                        p1.paddle.move({ -12.f, 0.f }); 
+                        if (p1.ballAttached && gameState == State::BREAKER) { p1.ballAttached = false; p1.ballVel = { -8.f, -8.f }; } 
+                    }
+                    if (sf::Keyboard::isKeyPressed(p1Right) && p1.paddle.getPosition().x < 1680.f - (p1.getCurrentWidth() / 2.f)) {
+                        p1.paddle.move({ 12.f, 0.f });
+                        if (p1.ballAttached && gameState == State::BREAKER) { p1.ballAttached = false; p1.ballVel = { 8.f, -8.f }; }
+                    }
+                }
+
+                // P2 Movement
+                if (!isSinglePlayer && (!p2.bricksFinished || gameState == State::WAITING)) {
+                    if (!p2.isBot) {
+                        if (sf::Keyboard::isKeyPressed(p2Left) && p2.paddle.getPosition().x > 240.f + p2.getCurrentWidth() / 2.f) {
+                            p2.paddle.move({ -12.f, 0.f });
+                            if (p2.ballAttached && gameState == State::BREAKER) { p2.ballAttached = false; p2.ballVel = { -8.f, 8.f }; }
+                        }
+                        if (sf::Keyboard::isKeyPressed(p2Right) && p2.paddle.getPosition().x < 1680.f - (p2.getCurrentWidth() / 2.f)) {
+                            p2.paddle.move({ 12.f, 0.f });
+                            if (p2.ballAttached && gameState == State::BREAKER) { p2.ballAttached = false; p2.ballVel = { 8.f, 8.f }; }
+                        }
+                    }
+                }
+
+                // Ball Positions
+                if (p1.ballAttached) p1.ball.setPosition({ p1.paddle.getPosition().x, 1000.f });
+                else if (!p1.bricksFinished) p1.ball.move(p1.ballVel);
+                
+                if (!isSinglePlayer) {
+                    if (p2.ballAttached) p2.ball.setPosition({ p2.paddle.getPosition().x, 80.f });
+                    else if (!p2.bricksFinished) p2.ball.move(p2.ballVel);
+                }
+
+                // Wall Collisions
+                if (!p1.bricksFinished) {
+                    if (p1.ball.getPosition().x < 250.f) { p1.ball.setPosition({250.f, p1.ball.getPosition().y}); p1.ballVel.x = std::abs(p1.ballVel.x); }
+                    else if (p1.ball.getPosition().x > 1670.f) { p1.ball.setPosition({1670.f, p1.ball.getPosition().y}); p1.ballVel.x = -std::abs(p1.ballVel.x); }
+                    
+                    if (isSinglePlayer) {
+                        if (p1.ball.getPosition().y < 0.f && p1.ballVel.y < 0) p1.ballVel.y *= -1; 
+                    } else {
+                        if (p1.ball.getPosition().y < 540.f && p1.ballVel.y < 0) p1.ballVel.y *= -1; 
+                    }
+                }
+
+                if (!isSinglePlayer && !p2.bricksFinished) {
+                    if (p2.ball.getPosition().x < 250.f) { p2.ball.setPosition({250.f, p2.ball.getPosition().y}); p2.ballVel.x = std::abs(p2.ballVel.x); }
+                    else if (p2.ball.getPosition().x > 1670.f) { p2.ball.setPosition({1670.f, p2.ball.getPosition().y}); p2.ballVel.x = -std::abs(p2.ballVel.x); }
+                    if (p2.ball.getPosition().y > 540.f && p2.ballVel.y > 0) p2.ballVel.y *= -1; 
+                }
+
+                // Life checks
+                if (!p1.bricksFinished && p1.ball.getPosition().y > 1080.f) {
+                    p1.lives--;
+                    if (p1.lives <= 0) { 
+                        centerText.setString(isSinglePlayer ? "GAME OVER" : "P2 WINS"); 
+                        gameState = State::GAME_OVER; 
+                    }
+                    else p1.resetBall(1020.f, false);
+                }
+                
+                if (!isSinglePlayer && !p2.bricksFinished && p2.ball.getPosition().y < 0.f) {
+                    p2.lives--;
+                    if (p2.lives <= 0) { centerText.setString("P1 WINS"); gameState = State::GAME_OVER; }
+                    else p2.resetBall(60.f, true);
+                }
+
+                // Dynamic Paddle Collisions
+                if (!p1.bricksFinished && p1.ball.getGlobalBounds().findIntersection(p1.paddle.getGlobalBounds())) {
+                    float currentSpeed = std::sqrt(p1.ballVel.x * p1.ballVel.x + p1.ballVel.y * p1.ballVel.y);
+                    p1.ballVel.y = -std::abs(p1.ballVel.y); 
+                    float hitOffset = p1.ball.getPosition().x - p1.paddle.getPosition().x;
+                    float normalizedOffset = hitOffset / (p1.getCurrentWidth() / 2.f); 
+                    p1.ballVel.x += normalizedOffset * 4.0f; 
+                    float newMagnitude = std::sqrt(p1.ballVel.x * p1.ballVel.x + p1.ballVel.y * p1.ballVel.y);
+                    p1.ballVel.x = (p1.ballVel.x / newMagnitude) * currentSpeed;
+                    p1.ballVel.y = (p1.ballVel.y / newMagnitude) * currentSpeed;
+                    enforceMinimumVerticalAngle(p1.ballVel, currentSpeed); 
+                }
+                
+                if (!isSinglePlayer && !p2.bricksFinished && p2.ball.getGlobalBounds().findIntersection(p2.paddle.getGlobalBounds())) {
+                    float currentSpeed = std::sqrt(p2.ballVel.x * p2.ballVel.x + p2.ballVel.y * p2.ballVel.y);
+                    p2.ballVel.y = std::abs(p2.ballVel.y); 
+                    float hitOffset = p2.ball.getPosition().x - p2.paddle.getPosition().x;
+                    float normalizedOffset = hitOffset / (p2.getCurrentWidth() / 2.f); 
+                    p2.ballVel.x += normalizedOffset * 4.0f; 
+                    float newMagnitude = std::sqrt(p2.ballVel.x * p2.ballVel.x + p2.ballVel.y * p2.ballVel.y);
+                    p2.ballVel.x = (p2.ballVel.x / newMagnitude) * currentSpeed;
+                    p2.ballVel.y = (p2.ballVel.y / newMagnitude) * currentSpeed;
+                    enforceMinimumVerticalAngle(p2.ballVel, currentSpeed); 
+                }
+
+                // Brick Collisions
+                int p1BricksLeft = 0, p2BricksLeft = 0;
+                bool p1BouncedThisFrame = false, p2BouncedThisFrame = false;
+                
+                for (auto& b : bricks) {
+                    if (!b.destroyed) {
+                        if (b.isPlayer1Side) p1BricksLeft++; else p2BricksLeft++;
+
+                        // Player 1
+                        if (b.isPlayer1Side && !p1.bricksFinished && p1.ball.getGlobalBounds().findIntersection(b.shape.getGlobalBounds())) {
+                            b.destroyed = true; 
+                            if (!p1BouncedThisFrame) { p1.ballVel.y *= -1; p1BouncedThisFrame = true; }
+                            
+                            if (b.type == 1) {
+                                p1.updateSize(-1);
+                            } else if (b.type == 2) {
+                                if (isSinglePlayer) p1.updateSize(1);
+                                else p2.updateSize(1);
+                            }
+                        }
+                        
+                        // Player 2
+                        if (!isSinglePlayer && !b.isPlayer1Side && !p2.bricksFinished && p2.ball.getGlobalBounds().findIntersection(b.shape.getGlobalBounds())) {
+                            b.destroyed = true; 
+                            if (!p2BouncedThisFrame) { p2.ballVel.y *= -1; p2BouncedThisFrame = true; }
+                            
+                            if (b.type == 1) p2.updateSize(-1); else if (b.type == 2) p1.updateSize(1); 
+                        }
+                    }
+                }
+
+                p1.bricksFinished = (p1BricksLeft == 0);
+                if (!isSinglePlayer) p2.bricksFinished = (p2BricksLeft == 0);
+
+                // Win Conditions
+                if (isSinglePlayer) {
+                    if (p1.bricksFinished) {
+                        centerText.setString("YOU WIN!"); 
+                        gameState = State::GAME_OVER;
+                    }
+                } else {
+                    if (p1.bricksFinished && p2.bricksFinished) {
+                        gameState = State::FACEOFF;
+                        setFaceoffTurn(p1.lives < p2.lives ? 1 : (p2.lives < p1.lives ? 2 : (rand() % 2 + 1)));
+                    } else if (gameState == State::BREAKER && (p1.bricksFinished || p2.bricksFinished)) {
+                        gameState = State::WAITING;
+                        waitClock.restart();
+                    }
+
+                    if (gameState == State::WAITING) {
+                        float timeLeft = countdownTime - waitClock.getElapsedTime().asSeconds();
+                        centerText.setString("Waiting: " + std::to_string((int)timeLeft));
+                        centerText.setPosition({ 850.f, 500.f });
+
+                        if (timeLeft <= 0) {
+                            if (!p1.bricksFinished) p1.lives--;
+                            if (!p2.bricksFinished) p2.lives--;
+                            if (p1.lives <= 0) { centerText.setString("P2 WINS"); gameState = State::GAME_OVER; }
+                            else if (p2.lives <= 0) { centerText.setString("P1 WINS"); gameState = State::GAME_OVER; }
+                            else {
+                                gameState = State::FACEOFF;
+                                setFaceoffTurn(p1.lives < p2.lives ? 1 : (p2.lives < p1.lives ? 2 : (rand() % 2 + 1)));
+                            }
+                        }
+                    }
+                }
+            } 
+            else if (gameState == State::FACEOFF) { 
+                centerText.setString("FACEOFF MODE");
+                centerText.setPosition({ 750.f, 450.f });
+
+                if (!faceoffBallLaunched) {
+                    if (activePlayer == 1) {
+                        p1.paddle.move({ faceoffPaddleSpeed, 0 });
+                        if (p1.paddle.getPosition().x > 1680.f - (p1.getCurrentWidth() / 2.f) || p1.paddle.getPosition().x < 240.f + p1.getCurrentWidth() / 2.f) faceoffPaddleSpeed *= -1;
+                        p1.ball.setPosition({ p1.paddle.getPosition().x, 1000.f });
+                    } else {
+                        p2.paddle.move({ faceoffPaddleSpeed, 0 });
+                        if (p2.paddle.getPosition().x > 1680.f - (p2.getCurrentWidth() / 2.f) || p2.paddle.getPosition().x < 240.f + p2.getCurrentWidth() / 2.f) faceoffPaddleSpeed *= -1;
+                        p2.ball.setPosition({ p2.paddle.getPosition().x, 80.f });
+
+                        if (p2.isBot && abs(p2.paddle.getPosition().x - p1.paddle.getPosition().x) < 15.f) {
+                            faceoffBallLaunched = true;
+                            p2.ballVel = { 0.f, 15.f }; 
+                        }
+                    }
+                } else {
+                    if (activePlayer == 1) {
+                        p1.ball.move(p1.ballVel);
+                        if (p1.ball.getGlobalBounds().findIntersection(p2.paddle.getGlobalBounds())) {
+                            p2.lives--;
+                            if (p2.lives <= 0) { centerText.setString("P1 WINS"); gameState = State::GAME_OVER; }
+                            else setFaceoffTurn(1); 
+                        } else if (p1.ball.getPosition().y < 0) {
+                            setFaceoffTurn(2); 
+                        }
+                    } else {
+                        p2.ball.move(p2.ballVel);
+                        if (p2.ball.getGlobalBounds().findIntersection(p1.paddle.getGlobalBounds())) {
+                            p1.lives--;
+                            if (p1.lives <= 0) { centerText.setString("P2 WINS"); gameState = State::GAME_OVER; }
+                            else setFaceoffTurn(2);
+                        } else if (p2.ball.getPosition().y > 1080.f) {
+                            setFaceoffTurn(1);
+                        }
+                    }
+                }
+            }
+            else if (gameState == State::GAME_OVER) {
+                centerText.setPosition({ 850.f, 400.f });
+                
+                sf::Vector2f mPos = window.mapPixelToCoords(sf::Mouse::getPosition(window));
+                btnPlayAgainRect.setFillColor(btnPlayAgainRect.getGlobalBounds().contains(mPos) ? sf::Color(70, 210, 70) : sf::Color(50, 180, 50));
+                btnGameOverReturnRect.setFillColor(btnGameOverReturnRect.getGlobalBounds().contains(mPos) ? sf::Color(210, 70, 70) : sf::Color(180, 50, 50));
+            }
         }
 
-        // --- Paddle collisions ---
-        if (ball.getGlobalBounds().findIntersection(paddle.getGlobalBounds()))
-            ballVelocity.y = -std::abs(ballVelocity.y);
+        // -------- RENDERING --------
+        window.clear(sf::Color(8, 8, 16)); 
 
-        if (ball2.getGlobalBounds().findIntersection(paddle2.getGlobalBounds()))
-            ballVelocity2.y = std::abs(ballVelocity2.y);
-
-        if (ball.getGlobalBounds().findIntersection(paddle2.getGlobalBounds()))
-            ballVelocity.y = std::abs(ballVelocity.y);
-
-        // --- Dividing line collisions ---
-        if (ball.getGlobalBounds().findIntersection(dividingLine.getGlobalBounds())) {
-            if (ballVelocity.y < 0 && ball.getPosition().y > sp(0,300).y)
-                ballVelocity.y = -ballVelocity.y;
-            else if (ballVelocity.y > 0 && ball.getPosition().y < sp(0,300).y)
-                ballVelocity.y = -ballVelocity.y;
-        }
-        if (ball2.getGlobalBounds().findIntersection(dividingLine.getGlobalBounds()))
-            ballVelocity2.y = -ballVelocity2.y;
-
-        // --- Brick collisions ---
-        for (auto& b : bricks) {
-            if (!b.destroyed &&
-                ball.getGlobalBounds().findIntersection(b.shape.getGlobalBounds()))
-            {
-                b.destroyed    = true;
-                ballVelocity.y = -ballVelocity.y;
-                break;
+        for (auto& star : stars) {
+            if (!isPaused && std::rand() % 100 < 2) { 
+                int alpha = star.getFillColor().a + (std::rand() % 50 - 25);
+                if (alpha < 50) alpha = 50; if (alpha > 255) alpha = 255;
+                star.setFillColor(sf::Color(255, 255, 255, alpha));
             }
-            if (!b.destroyed &&
-                ball2.getGlobalBounds().findIntersection(b.shape.getGlobalBounds()))
-            {
-                b.destroyed     = true;
-                ballVelocity2.y = -ballVelocity2.y;
+            window.draw(star);
+        }
+        
+        if (gameState == State::BREAKER || gameState == State::WAITING) {
+            if (!isSinglePlayer) window.draw(dividingLine);
+            for (const auto& b : bricks) { if (!b.destroyed) window.draw(b.shape); }
+        }
+
+        if (!p1.bricksFinished || gameState == State::FACEOFF) {
+            window.draw(p1.paddle);
+            if (gameState == State::BREAKER || gameState == State::WAITING || (gameState == State::FACEOFF && activePlayer == 1)) {
+                window.draw(p1.ball);
             }
         }
 
-        // --- Render gameplay ---
-        window.clear(sf::Color(8, 8, 24));
-        drawBackground();
-
-        window.draw(dividingLine);
-        window.draw(paddle);
-        window.draw(paddle2);
-        window.draw(ball);
-        window.draw(ball2);
-
-        for (const auto& b : bricks)
-            if (!b.destroyed) window.draw(b.shape);
-
-        if (fontLoaded) {
-            window.draw(titleText);
-            window.draw(swapHintText);
-            // In 1-player mode hide P2 control label, show CPU label instead
-            if (playerMode == 2) {
-                window.draw(p2ControlsText);
-                window.draw(swapHintText);
-            } else {
-                window.draw(cpuLabel);
+        if (!isSinglePlayer) {
+            if (!p2.bricksFinished || gameState == State::FACEOFF) {
+                window.draw(p2.paddle);
+                if (gameState == State::BREAKER || gameState == State::WAITING || (gameState == State::FACEOFF && activePlayer == 2)) {
+                    window.draw(p2.ball);
+                }
             }
-            window.draw(p1ControlsText);
-            window.draw(muteText);
-            window.draw(muteIndicator);
+        }
+
+        window.draw(leftWall);
+        window.draw(rightWall);
+
+        p1LivesText.setString("Lives: " + std::to_string(p1.lives));
+        p1SizeText.setString("Size: " + std::to_string(p1.sizeLevel));
+        window.draw(p1Title); window.draw(p1LivesText); window.draw(p1SizeText);
+
+        if (!isSinglePlayer) {
+            p2LivesText.setString("Lives: " + std::to_string(p2.lives));
+            p2SizeText.setString("Size: " + std::to_string(p2.sizeLevel));
+            window.draw(p2Title); window.draw(p2LivesText); window.draw(p2SizeText);
+        }
+
+        if (gameState == State::WAITING || gameState == State::FACEOFF || gameState == State::GAME_OVER) window.draw(centerText);
+        
+        if (gameState == State::GAME_OVER) {
+            window.draw(btnPlayAgainRect); window.draw(btnPlayAgainText);
+            window.draw(btnGameOverReturnRect); window.draw(btnGameOverReturnText);
+        }
+
+        if (isPaused) {
+            sf::Vector2f mPos = window.mapPixelToCoords(sf::Mouse::getPosition(window));
+            btnReturnRect.setFillColor(btnReturnRect.getGlobalBounds().contains(mPos) ? sf::Color(210, 70, 70) : sf::Color(180, 50, 50));
+            btnResumeRect.setFillColor(btnResumeRect.getGlobalBounds().contains(mPos) ? sf::Color(70, 210, 70) : sf::Color(50, 180, 50));
+            btnPauseMuteRect.setFillColor(btnPauseMuteRect.getGlobalBounds().contains(mPos) ? sf::Color(110, 110, 110) : sf::Color(80, 80, 80));
+
+            sf::RectangleShape pauseBg({ 650.f, 400.f }); 
+            pauseBg.setFillColor(sf::Color(30, 30, 30, 230)); 
+            pauseBg.setOutlineThickness(4.f); pauseBg.setOutlineColor(sf::Color::White);
+            pauseBg.setPosition({ 635.f, 310.f });
+
+            window.draw(pauseBg); 
+            window.draw(pauseText);
+            window.draw(btnReturnRect); window.draw(btnReturnText);
+            window.draw(btnResumeRect); window.draw(btnResumeText);
+            window.draw(btnPauseMuteRect); window.draw(btnPauseMuteText);
         }
 
         window.display();
     }
-
     return 0;
 }
