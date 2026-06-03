@@ -1,8 +1,12 @@
 #include <SFML/Graphics.hpp>
 #include <vector>
+#include <cstdlib>   // for rand
+#include <ctime>     // for time
 #include <optional>
 
+
 int main() {
+    srand(time(0));   // V8 NEW: random colors each game
     // Create window (800x600)
     sf::RenderWindow window(sf::VideoMode({800, 600}), "SFML Brick Breaker");
     window.setFramerateLimit(60); // Smooth gameplay
@@ -52,13 +56,45 @@ int main() {
 
     std::vector<Brick> bricks;
 
+    
+
     // Create brick grid (8 columns x 6 rows)
     for (int i = 0; i < 8; ++i) {
         for (int j = 0; j < 6; ++j) {   
             Brick b;
 
             b.shape.setSize({90.f, 30.f});
-            b.shape.setFillColor(sf::Color::Red);
+            // Default color for normal bricks
+            b.shape.setFillColor(sf::Color::White);
+
+            // Determine section
+            bool isTop = (j < 3);
+            int row = isTop ? j : (j - 3);
+
+            // Check if this brick is special
+            bool isSpecial = false;
+
+            // Middle row → left & right
+            if (row == 1 && (i == 0 || i == 7))
+                isSpecial = true;
+
+            // Top row → center
+            if (row == 0 && i == 3 )
+                isSpecial = true;
+
+            // Bottom row → center
+            if (row == 2 && i == 3 )
+                isSpecial = true;
+
+            // V8 NEW: each special brick random independently
+            if (isSpecial) {
+                if (rand() % 2 == 0)
+                    b.shape.setFillColor(sf::Color::Green);
+                else
+                    b.shape.setFillColor(sf::Color::Red);
+            }
+
+            
 
             // Add border to bricks
             b.shape.setOutlineThickness(2.f);
