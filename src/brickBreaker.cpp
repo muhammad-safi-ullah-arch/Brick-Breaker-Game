@@ -11,6 +11,17 @@
 // --- Game States ---
 enum class State { TITLE, BREAKER, WAITING, FACEOFF, GAME_OVER };
 
+// --- Physics Helper ---
+void enforceMinimumVerticalAngle(sf::Vector2f& vel, float speed) {
+    float minY = speed * 0.2f; 
+    if (std::abs(vel.y) < minY) {
+        vel.y = (vel.y > 0) ? minY : -minY;
+        float newMag = std::sqrt(vel.x * vel.x + vel.y * vel.y);
+        vel.x = (vel.x / newMag) * speed;
+        vel.y = (vel.y / newMag) * speed;
+    }
+}
+
 // --- Player Data Structure ---
 struct Player {
     sf::RectangleShape paddle;
@@ -23,9 +34,7 @@ struct Player {
     
     int sizeLevel = 4; 
 
-    float getCurrentWidth() const {
-        return sizeLevel * 60.f; 
-    }
+    float getCurrentWidth() const { return sizeLevel * 60.f; }
 
     void updateSize(int deltaLevel) {
         sizeLevel += deltaLevel;
@@ -43,6 +52,40 @@ struct Player {
         float yOffset = isTop ? 20.f : -20.f;
         ball.setPosition({ 960.f, startY + yOffset });
     }
+
+    void checkWallCollisions(bool isSinglePlayer, bool isPlayer1) {
+        if (ball.getPosition().x < 250.f) { 
+            ball.setPosition({250.f, ball.getPosition().y}); 
+            ballVel.x = std::abs(ballVel.x); 
+        } else if (ball.getPosition().x > 1670.f) { 
+            ball.setPosition({1670.f, ball.getPosition().y}); 
+            ballVel.x = -std::abs(ballVel.x); 
+        }
+        
+        if (isPlayer1) {
+            float ceiling = isSinglePlayer ? 0.f : 540.f;
+            if (ball.getPosition().y < ceiling && ballVel.y < 0) ballVel.y *= -1; 
+        } else {
+            if (ball.getPosition().y > 540.f && ballVel.y > 0) ballVel.y *= -1; 
+        }
+    }
+
+    void handlePaddleCollision(bool isPlayer1) {
+        if (ball.getGlobalBounds().findIntersection(paddle.getGlobalBounds())) {
+            float currentSpeed = std::sqrt(ballVel.x * ballVel.x + ballVel.y * ballVel.y);
+            // Bounce up if P1 (bottom), bounce down if P2 (top)
+            ballVel.y = isPlayer1 ? -std::abs(ballVel.y) : std::abs(ballVel.y); 
+            
+            float hitOffset = ball.getPosition().x - paddle.getPosition().x;
+            float normalizedOffset = hitOffset / (getCurrentWidth() / 2.f); 
+            ballVel.x += normalizedOffset * 4.0f; 
+            
+            float newMagnitude = std::sqrt(ballVel.x * ballVel.x + ballVel.y * ballVel.y);
+            ballVel.x = (ballVel.x / newMagnitude) * currentSpeed;
+            ballVel.y = (ballVel.y / newMagnitude) * currentSpeed;
+            enforceMinimumVerticalAngle(ballVel, currentSpeed); 
+        }
+    }
 };
 
 // --- Brick Structure ---
@@ -53,23 +96,11 @@ struct Brick {
     bool isPlayer1Side = false;
 };
 
-// --- Physics Helper ---
-void enforceMinimumVerticalAngle(sf::Vector2f& vel, float speed) {
-    float minY = speed * 0.2f; 
-    if (std::abs(vel.y) < minY) {
-        vel.y = (vel.y > 0) ? minY : -minY;
-        float newMag = std::sqrt(vel.x * vel.x + vel.y * vel.y);
-        vel.x = (vel.x / newMag) * speed;
-        vel.y = (vel.y / newMag) * speed;
-    }
-}
-
 int main() {
     std::srand(static_cast<unsigned>(std::time(nullptr)));
     
     // --- FULLSCREEN WINDOW SETUP ---
-    // Notice the sf::State::Fullscreen flag added here!
-    sf::RenderWindow window(sf::VideoMode({ 1920, 1080 }), "PADDLE ROYALE", sf::State::Fullscreen);
+    sf::RenderWindow window(sf::VideoMode({ 1920, 1080 }), "Paddle Royale", sf::State::Fullscreen);
     window.setFramerateLimit(60);
 
     sf::Font font;
@@ -117,7 +148,7 @@ int main() {
     sf::Text p2LivesText(font, "Lives: 6", 30); p2LivesText.setPosition({ 1700.f, 100.f });
     sf::Text p2SizeText(font, "Size: 4", 25); p2SizeText.setPosition({ 1700.f, 150.f });
     
-    sf::Text centerText(font, "", 50);
+    sf::Text centerText(font, "", 50); 
     sf::Text titleText(font, "PADDLE ROYALE", 80); titleText.setPosition({ 650.f, 200.f });
     sf::Text controlsText(font, "", 30); controlsText.setPosition({ 750.f, 700.f });
     sf::Text swapText(font, "Press TAB to switch player controls", 25); swapText.setPosition({ 770.f, 900.f }); swapText.setFillColor(sf::Color::Yellow);
@@ -133,7 +164,7 @@ int main() {
     sf::Text btnTitleExitText(font, "Exit Game", 35); btnTitleExitText.setPosition({ 875.f, 595.f });
 
     sf::RectangleShape btnTitleMuteRect({ 140.f, 50.f }); btnTitleMuteRect.setPosition({ 1700.f, 980.f }); btnTitleMuteRect.setFillColor(sf::Color(80, 80, 80));
-    sf::Text btnTitleMuteText(font, "MUTE", 25); btnTitleMuteText.setPosition({ 1735.f, 990.f });
+    sf::Text btnTitleMuteText(font, "MUTE", 25); 
 
     // --- PAUSE MENU BUTTONS ---
     sf::Text pauseText(font, "PAUSED", 45); pauseText.setPosition({ 870.f, 350.f });
@@ -145,7 +176,7 @@ int main() {
     sf::Text btnResumeText(font, "RESUME", 50); btnResumeText.setPosition({ 860.f, 515.f });
 
     sf::RectangleShape btnPauseMuteRect({ 250.f, 45.f }); btnPauseMuteRect.setPosition({ 835.f, 630.f }); btnPauseMuteRect.setFillColor(sf::Color(80, 80, 80));
-    sf::Text btnPauseMuteText(font, "MUTE AUDIO", 25); btnPauseMuteText.setPosition({ 880.f, 638.f });
+    sf::Text btnPauseMuteText(font, "MUTE AUDIO", 25);
 
     // --- GAME OVER BUTTONS ---
     sf::RectangleShape btnPlayAgainRect({ 300.f, 60.f }); btnPlayAgainRect.setPosition({ 810.f, 550.f }); btnPlayAgainRect.setFillColor(sf::Color(50, 180, 50));
@@ -153,6 +184,26 @@ int main() {
 
     sf::RectangleShape btnGameOverReturnRect({ 450.f, 60.f }); btnGameOverReturnRect.setPosition({ 735.f, 640.f }); btnGameOverReturnRect.setFillColor(sf::Color(180, 50, 50));
     sf::Text btnGameOverReturnText(font, "RETURN TO TITLE SCREEN", 25); btnGameOverReturnText.setPosition({ 790.f, 655.f });
+
+    // --- TEXT CENTERING HELPERS ---
+    auto alignTextToCenter = [](sf::Text& text, const sf::RectangleShape& bg) {
+        sf::FloatRect bounds = text.getLocalBounds();
+        text.setOrigin({ bounds.position.x + bounds.size.x / 2.0f, 
+                         bounds.position.y + bounds.size.y / 2.0f });
+        text.setPosition({ bg.getPosition().x + bg.getSize().x / 2.0f, 
+                           bg.getPosition().y + bg.getSize().y / 2.0f });
+    };
+
+    auto alignTextToPoint = [](sf::Text& text, sf::Vector2f point) {
+        sf::FloatRect bounds = text.getLocalBounds();
+        text.setOrigin({ bounds.position.x + bounds.size.x / 2.0f, 
+                         bounds.position.y + bounds.size.y / 2.0f });
+        text.setPosition(point);
+    };
+
+    alignTextToCenter(btnTitleMuteText, btnTitleMuteRect);
+    alignTextToCenter(btnPauseMuteText, btnPauseMuteRect);
+    alignTextToPoint(pauseText, { 960.f, 350.f });
 
     Player p1, p2;
     p1.paddle.setFillColor(sf::Color::Blue); p2.paddle.setFillColor(sf::Color::Green);
@@ -171,12 +222,13 @@ int main() {
     bool faceoffBallLaunched = false;
     float faceoffPaddleSpeed = 12.f; 
 
-    // Helper to toggle audio state
     auto toggleAudio = [&]() {
         isMuted = !isMuted;
         bgMusic.setVolume(isMuted ? 0.f : 50.f);
         btnTitleMuteText.setString(isMuted ? "UNMUTE" : "MUTE");
         btnPauseMuteText.setString(isMuted ? "UNMUTE AUDIO" : "MUTE AUDIO");
+        alignTextToCenter(btnTitleMuteText, btnTitleMuteRect);
+        alignTextToCenter(btnPauseMuteText, btnPauseMuteRect);
     };
 
     auto resetGame = [&]() {
@@ -201,44 +253,29 @@ int main() {
                 b.shape.setOutlineThickness(-3.f);
                 b.shape.setOutlineColor(sf::Color(25, 25, 25)); 
 
-                if (isSinglePlayer) {
-                    b.isPlayer1Side = true; 
-                    int row = j;
-                    bool isSpecial = false;
-                    if ((row == 1 || row == 7) && (i == 2 || i == 9)) isSpecial = true; 
-                    if ((row == 3 || row == 9) && i == 5) isSpecial = true;              
-                    if ((row == 4 || row == 10) && (i == 3 || i == 8)) isSpecial = true; 
+                b.isPlayer1Side = isSinglePlayer ? true : (j >= 6);
+                
+                // Unified special brick pattern
+                int row = j % 6; 
+                bool isSpecial = false;
+                if (row == 1 && (i == 2 || i == 9)) isSpecial = true; 
+                if (row == 3 && i == 5) isSpecial = true;              
+                if (row == 4 && (i == 3 || i == 8)) isSpecial = true; 
 
-                    if (isSpecial) {
-                        b.type = (rand() % 2 == 0) ? 1 : 2; 
-                        b.shape.setFillColor((b.type == 1) ? sf::Color::Red : sf::Color::Green);
-                    } else {
-                        b.shape.setFillColor(sf::Color::White);
-                    }
-                    b.shape.setPosition({ i * 120.f + 240.f, j * 35.f + 100.f }); 
-                    bricks.push_back(b);
+                if (isSpecial) {
+                    b.type = (std::rand() % 2 == 0) ? 1 : 2; 
+                    b.shape.setFillColor((b.type == 1) ? sf::Color::Red : sf::Color::Green);
                 } else {
-                    b.isPlayer1Side = (j >= 6);
-                    int row = b.isPlayer1Side ? (j - 6) : j;
-                    bool isSpecial = false;
-                    if (row == 1 && (i == 2 || i == 9)) isSpecial = true; 
-                    if (row == 3 && i == 5) isSpecial = true;              
-                    if (row == 4 && (i == 3 || i == 8)) isSpecial = true; 
-
-                    if (isSpecial) {
-                        b.type = (rand() % 2 == 0) ? 1 : 2; 
-                        b.shape.setFillColor((b.type == 1) ? sf::Color::Red : sf::Color::Green);
-                    } else {
-                        b.shape.setFillColor(sf::Color::White);
-                    }
-
-                    if (!b.isPlayer1Side) {
-                        b.shape.setPosition({ i * 120.f + 240.f, j * 35.f + 300.f }); 
-                    } else {
-                        b.shape.setPosition({ i * 120.f + 240.f, (j - 6) * 35.f + 570.f }); 
-                    }
-                    bricks.push_back(b);
+                    b.shape.setFillColor(sf::Color::White);
                 }
+
+                float yPos;
+                if (isSinglePlayer) yPos = j * 35.f + 100.f;
+                else if (!b.isPlayer1Side) yPos = j * 35.f + 300.f;
+                else yPos = (j - 6) * 35.f + 570.f;
+
+                b.shape.setPosition({ i * 120.f + 240.f, yPos }); 
+                bricks.push_back(b);
             }
         }
     };
@@ -274,7 +311,6 @@ int main() {
                         if (btnMPRect.getGlobalBounds().contains(mousePos)) {
                             isSinglePlayer = false; p2.isBot = false; resetGame(); gameState = State::BREAKER;
                         }
-                        // Check for exit click
                         if (btnTitleExitRect.getGlobalBounds().contains(mousePos)) {
                             window.close();
                         }
@@ -338,10 +374,7 @@ int main() {
             sf::Vector2f mPos = window.mapPixelToCoords(sf::Mouse::getPosition(window));
             btnSPRect.setFillColor(btnSPRect.getGlobalBounds().contains(mPos) ? sf::Color(90, 90, 90) : sf::Color(60, 60, 60));
             btnMPRect.setFillColor(btnMPRect.getGlobalBounds().contains(mPos) ? sf::Color(90, 90, 90) : sf::Color(60, 60, 60));
-            
-            // Hover effect for exit button
             btnTitleExitRect.setFillColor(btnTitleExitRect.getGlobalBounds().contains(mPos) ? sf::Color(210, 70, 70) : sf::Color(180, 50, 50));
-            
             btnTitleMuteRect.setFillColor(btnTitleMuteRect.getGlobalBounds().contains(mPos) ? sf::Color(110, 110, 110) : sf::Color(80, 80, 80));
 
             window.clear(sf::Color(8, 8, 16)); 
@@ -375,11 +408,11 @@ int main() {
                 if (!p1.bricksFinished || gameState == State::WAITING) {
                     if (sf::Keyboard::isKeyPressed(p1Left) && p1.paddle.getPosition().x > 240.f + p1.getCurrentWidth() / 2.f) {
                         p1.paddle.move({ -12.f, 0.f }); 
-                        if (p1.ballAttached && gameState == State::BREAKER) { p1.ballAttached = false; p1.ballVel = { -8.f, -8.f }; } 
+                        if (p1.ballAttached) { p1.ballAttached = false; p1.ballVel = { -8.f, -8.f }; } 
                     }
                     if (sf::Keyboard::isKeyPressed(p1Right) && p1.paddle.getPosition().x < 1680.f - (p1.getCurrentWidth() / 2.f)) {
                         p1.paddle.move({ 12.f, 0.f });
-                        if (p1.ballAttached && gameState == State::BREAKER) { p1.ballAttached = false; p1.ballVel = { 8.f, -8.f }; }
+                        if (p1.ballAttached) { p1.ballAttached = false; p1.ballVel = { 8.f, -8.f }; }
                     }
                 }
 
@@ -388,11 +421,11 @@ int main() {
                     if (!p2.isBot) {
                         if (sf::Keyboard::isKeyPressed(p2Left) && p2.paddle.getPosition().x > 240.f + p2.getCurrentWidth() / 2.f) {
                             p2.paddle.move({ -12.f, 0.f });
-                            if (p2.ballAttached && gameState == State::BREAKER) { p2.ballAttached = false; p2.ballVel = { -8.f, 8.f }; }
+                            if (p2.ballAttached) { p2.ballAttached = false; p2.ballVel = { -8.f, 8.f }; }
                         }
                         if (sf::Keyboard::isKeyPressed(p2Right) && p2.paddle.getPosition().x < 1680.f - (p2.getCurrentWidth() / 2.f)) {
                             p2.paddle.move({ 12.f, 0.f });
-                            if (p2.ballAttached && gameState == State::BREAKER) { p2.ballAttached = false; p2.ballVel = { 8.f, 8.f }; }
+                            if (p2.ballAttached) { p2.ballAttached = false; p2.ballVel = { 8.f, 8.f }; }
                         }
                     }
                 }
@@ -407,22 +440,12 @@ int main() {
                 }
 
                 // Wall Collisions
-                if (!p1.bricksFinished) {
-                    if (p1.ball.getPosition().x < 250.f) { p1.ball.setPosition({250.f, p1.ball.getPosition().y}); p1.ballVel.x = std::abs(p1.ballVel.x); }
-                    else if (p1.ball.getPosition().x > 1670.f) { p1.ball.setPosition({1670.f, p1.ball.getPosition().y}); p1.ballVel.x = -std::abs(p1.ballVel.x); }
-                    
-                    if (isSinglePlayer) {
-                        if (p1.ball.getPosition().y < 0.f && p1.ballVel.y < 0) p1.ballVel.y *= -1; 
-                    } else {
-                        if (p1.ball.getPosition().y < 540.f && p1.ballVel.y < 0) p1.ballVel.y *= -1; 
-                    }
-                }
+                if (!p1.bricksFinished) p1.checkWallCollisions(isSinglePlayer, true);
+                if (!isSinglePlayer && !p2.bricksFinished) p2.checkWallCollisions(isSinglePlayer, false);
 
-                if (!isSinglePlayer && !p2.bricksFinished) {
-                    if (p2.ball.getPosition().x < 250.f) { p2.ball.setPosition({250.f, p2.ball.getPosition().y}); p2.ballVel.x = std::abs(p2.ballVel.x); }
-                    else if (p2.ball.getPosition().x > 1670.f) { p2.ball.setPosition({1670.f, p2.ball.getPosition().y}); p2.ballVel.x = -std::abs(p2.ballVel.x); }
-                    if (p2.ball.getPosition().y > 540.f && p2.ballVel.y > 0) p2.ballVel.y *= -1; 
-                }
+                // Dynamic Paddle Collisions
+                if (!p1.bricksFinished) p1.handlePaddleCollision(true);
+                if (!isSinglePlayer && !p2.bricksFinished) p2.handlePaddleCollision(false);
 
                 // Life checks
                 if (!p1.bricksFinished && p1.ball.getPosition().y > 1080.f) {
@@ -440,31 +463,6 @@ int main() {
                     else p2.resetBall(60.f, true);
                 }
 
-                // Dynamic Paddle Collisions
-                if (!p1.bricksFinished && p1.ball.getGlobalBounds().findIntersection(p1.paddle.getGlobalBounds())) {
-                    float currentSpeed = std::sqrt(p1.ballVel.x * p1.ballVel.x + p1.ballVel.y * p1.ballVel.y);
-                    p1.ballVel.y = -std::abs(p1.ballVel.y); 
-                    float hitOffset = p1.ball.getPosition().x - p1.paddle.getPosition().x;
-                    float normalizedOffset = hitOffset / (p1.getCurrentWidth() / 2.f); 
-                    p1.ballVel.x += normalizedOffset * 4.0f; 
-                    float newMagnitude = std::sqrt(p1.ballVel.x * p1.ballVel.x + p1.ballVel.y * p1.ballVel.y);
-                    p1.ballVel.x = (p1.ballVel.x / newMagnitude) * currentSpeed;
-                    p1.ballVel.y = (p1.ballVel.y / newMagnitude) * currentSpeed;
-                    enforceMinimumVerticalAngle(p1.ballVel, currentSpeed); 
-                }
-                
-                if (!isSinglePlayer && !p2.bricksFinished && p2.ball.getGlobalBounds().findIntersection(p2.paddle.getGlobalBounds())) {
-                    float currentSpeed = std::sqrt(p2.ballVel.x * p2.ballVel.x + p2.ballVel.y * p2.ballVel.y);
-                    p2.ballVel.y = std::abs(p2.ballVel.y); 
-                    float hitOffset = p2.ball.getPosition().x - p2.paddle.getPosition().x;
-                    float normalizedOffset = hitOffset / (p2.getCurrentWidth() / 2.f); 
-                    p2.ballVel.x += normalizedOffset * 4.0f; 
-                    float newMagnitude = std::sqrt(p2.ballVel.x * p2.ballVel.x + p2.ballVel.y * p2.ballVel.y);
-                    p2.ballVel.x = (p2.ballVel.x / newMagnitude) * currentSpeed;
-                    p2.ballVel.y = (p2.ballVel.y / newMagnitude) * currentSpeed;
-                    enforceMinimumVerticalAngle(p2.ballVel, currentSpeed); 
-                }
-
                 // Brick Collisions
                 int p1BricksLeft = 0, p2BricksLeft = 0;
                 bool p1BouncedThisFrame = false, p2BouncedThisFrame = false;
@@ -473,20 +471,18 @@ int main() {
                     if (!b.destroyed) {
                         if (b.isPlayer1Side) p1BricksLeft++; else p2BricksLeft++;
 
-                        // Player 1
+                        // Player 1 Brick Collision
                         if (b.isPlayer1Side && !p1.bricksFinished && p1.ball.getGlobalBounds().findIntersection(b.shape.getGlobalBounds())) {
                             b.destroyed = true; 
                             if (!p1BouncedThisFrame) { p1.ballVel.y *= -1; p1BouncedThisFrame = true; }
                             
-                            if (b.type == 1) {
-                                p1.updateSize(-1);
-                            } else if (b.type == 2) {
-                                if (isSinglePlayer) p1.updateSize(1);
-                                else p2.updateSize(1);
+                            if (b.type == 1) p1.updateSize(-1);
+                            else if (b.type == 2) {
+                                if (isSinglePlayer) p1.updateSize(1); else p2.updateSize(1);
                             }
                         }
                         
-                        // Player 2
+                        // Player 2 Brick Collision
                         if (!isSinglePlayer && !b.isPlayer1Side && !p2.bricksFinished && p2.ball.getGlobalBounds().findIntersection(b.shape.getGlobalBounds())) {
                             b.destroyed = true; 
                             if (!p2BouncedThisFrame) { p2.ballVel.y *= -1; p2BouncedThisFrame = true; }
@@ -517,7 +513,7 @@ int main() {
                     if (gameState == State::WAITING) {
                         float timeLeft = countdownTime - waitClock.getElapsedTime().asSeconds();
                         centerText.setString("Waiting: " + std::to_string((int)timeLeft));
-                        centerText.setPosition({ 850.f, 500.f });
+                        alignTextToPoint(centerText, { 960.f, 500.f });
 
                         if (timeLeft <= 0) {
                             if (!p1.bricksFinished) p1.lives--;
@@ -534,7 +530,7 @@ int main() {
             } 
             else if (gameState == State::FACEOFF) { 
                 centerText.setString("FACEOFF MODE");
-                centerText.setPosition({ 750.f, 450.f });
+                alignTextToPoint(centerText, { 960.f, 450.f });
 
                 if (!faceoffBallLaunched) {
                     if (activePlayer == 1) {
@@ -574,7 +570,7 @@ int main() {
                 }
             }
             else if (gameState == State::GAME_OVER) {
-                centerText.setPosition({ 850.f, 400.f });
+                alignTextToPoint(centerText, { 960.f, 400.f });
                 
                 sf::Vector2f mPos = window.mapPixelToCoords(sf::Mouse::getPosition(window));
                 btnPlayAgainRect.setFillColor(btnPlayAgainRect.getGlobalBounds().contains(mPos) ? sf::Color(70, 210, 70) : sf::Color(50, 180, 50));
