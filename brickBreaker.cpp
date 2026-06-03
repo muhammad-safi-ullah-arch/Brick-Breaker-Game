@@ -7,11 +7,24 @@ int main() {
     sf::RenderWindow window(sf::VideoMode({800, 600}), "SFML Brick Breaker");
     window.setFramerateLimit(60); // Smooth gameplay
 
-    // ------------------- PADDLE -------------------
+    // ------------------- PLAYER 1 PADDLE (Bottom) -------------------
     sf::RectangleShape paddle({100.f, 20.f});
     paddle.setFillColor(sf::Color::Blue);
     paddle.setOrigin({50.f, 10.f});  // Center origin
     paddle.setPosition({400.f, 550.f}); // Bottom center
+
+    
+    // ------------------- PLAYER 2 PADDLE (TOP) -------------------
+    sf::RectangleShape paddle2({100.f, 20.f}); // V4 Working --> Adding new player2 Paddle
+    paddle2.setFillColor(sf::Color::Green);
+    paddle2.setOrigin({50.f, 10.f});
+    paddle2.setPosition({400.f, 50.f}); // Top side
+
+    // ------------------- DIVIDING LINE -------------------
+    sf::RectangleShape dividingLine({800.f, 3.f}); // full width line
+    dividingLine.setFillColor(sf::Color::White); 
+    dividingLine.setPosition({0.f, 300.f}); // middle of screen (600/2)
+    
 
     // ------------------- BALL -------------------
     sf::CircleShape ball(10.f);
@@ -32,7 +45,7 @@ int main() {
 
     // Create brick grid (8 columns x 6 rows)
     for (int i = 0; i < 8; ++i) {
-        for (int j = 0; j < 6; ++j) {  // V2 rows changed from 5 → 6 rows 
+        for (int j = 0; j < 6; ++j) {   
             Brick b;
 
             b.shape.setSize({90.f, 30.f});
@@ -43,7 +56,7 @@ int main() {
             b.shape.setOutlineColor(sf::Color::Black);
 
             // Position bricks in grid
-            b.shape.setPosition({i * 100.f + 5.f, j * 35.f + 40.f}); // V2 changed from 40.f + 50.f → rows35.f + 40.f
+            b.shape.setPosition({i * 100.f + 5.f, j * 35.f + 40.f}); 
 
             bricks.push_back(b);
         }
@@ -59,7 +72,9 @@ int main() {
             }
         }
 
-        // -------- INPUT (PADDLE CONTROL) --------
+                // ********** INPUT (PADDLE CONTROL) **********
+                
+        // -------- PLAYER 1 CONTROLS --------
         if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::Left) &&
             paddle.getPosition().x > 50)
         {
@@ -71,11 +86,27 @@ int main() {
         {
             paddle.move({7.f, 0.f}); // Move right
         }
+        
+        // -------- PLAYER 2 CONTROLS --------
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::A) &&
+            paddle2.getPosition().x > 50)
+        {
+            paddle2.move({-7.f, 0.f}); // Move left   // V4- Adding control of Player2
+        }
+
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::D) &&
+            paddle2.getPosition().x < 750)
+        {
+            paddle2.move({7.f, 0.f}); // Move right
+        }
 
         // -------- BALL MOVEMENT --------
         ball.move(ballVelocity);
 
         sf::Vector2f pos = ball.getPosition();
+
+
+                // ******** COLLISIONS **********
 
         // -------- WALL COLLISIONS --------
         if (pos.x < 10 || pos.x > 790)
@@ -107,6 +138,8 @@ int main() {
         window.clear();
 
         window.draw(paddle);
+        window.draw(paddle2); // Added in V4 code --> new paddle
+        window.draw(dividingLine); 
         window.draw(ball);
 
         for (const auto& b : bricks) {
