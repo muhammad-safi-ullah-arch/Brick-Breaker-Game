@@ -1,0 +1,21 @@
+# Executables
+*.exe
+*.out
+
+# Build files
+build/
+Debug/
+Release/
+
+# Object files
+*.o
+*.obj
+
+# VS Code settings
+.vscode/
+
+# SFML build leftovers
+*.dll
+
+# Temporary files
+*.log
