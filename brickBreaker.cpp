@@ -3,7 +3,7 @@
 #include <optional>
 
 int main() {
-    // Creating window (800x600)
+    // Create window (800x600)
     sf::RenderWindow window(sf::VideoMode({800, 600}), "SFML Brick Breaker");
     window.setFramerateLimit(60); // Smooth gameplay
 
@@ -30,9 +30,9 @@ int main() {
 
     std::vector<Brick> bricks;
 
-    // Create brick grid (8 columns x 5 rows)
+    // Create brick grid (8 columns x 6 rows)
     for (int i = 0; i < 8; ++i) {
-        for (int j = 0; j < 5; ++j) {
+        for (int j = 0; j < 6; ++j) {  // V2 rows changed from 5 → 6 rows 
             Brick b;
 
             b.shape.setSize({90.f, 30.f});
@@ -43,27 +43,11 @@ int main() {
             b.shape.setOutlineColor(sf::Color::Black);
 
             // Position bricks in grid
-            b.shape.setPosition({i * 100.f + 5.f, j * 40.f + 50.f}); 
-           
+            b.shape.setPosition({i * 100.f + 5.f, j * 35.f + 40.f}); // V2 changed from 40.f + 50.f → rows35.f + 40.f
+
             bricks.push_back(b);
         }
     }
-            /*
-            x=i⋅(brick width+gap)+offsetx
-	        y=j⋅(brick height+gap)+offsety
-
-	         X-Coordinate
-            i * 100.f + 5.f
-            i → column number (0,1,2,...)
-            100.f → horizontal spacing between bricks
-            +5.f → small margin from left edge
-
-            So:
-
-            Brick 0 → x = 5
-            Brick 1 → x = 105
-            Brick 2 → x = 205 */
-    
 
     // ================= GAME LOOP =================
     while (window.isOpen()) {
@@ -116,7 +100,7 @@ int main() {
                 b.destroyed = true;      // Break brick
                 ballVelocity.y = -ballVelocity.y; // Bounce
                 break;
-                }
+            }
         }
 
         // -------- RENDERING --------
