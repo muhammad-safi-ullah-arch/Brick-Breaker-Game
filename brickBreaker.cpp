@@ -15,7 +15,7 @@ int main() {
 
     
     // ------------------- PLAYER 2 PADDLE (TOP) -------------------
-    sf::RectangleShape paddle2({100.f, 20.f}); // V4 Working --> Adding new player2 Paddle
+    sf::RectangleShape paddle2({100.f, 20.f}); 
     paddle2.setFillColor(sf::Color::Green);
     paddle2.setOrigin({50.f, 10.f});
     paddle2.setPosition({400.f, 50.f}); // Top side
@@ -30,10 +30,19 @@ int main() {
     sf::CircleShape ball(10.f);
     ball.setFillColor(sf::Color::White);
     ball.setOrigin({10.f, 10.f}); // Center origin
-    ball.setPosition({400.f, 300.f}); // Start in middle
+    ball.setPosition({400.f, 550.f}); // V7 ---> Not start in middle 
 
     // Ball movement speed
     sf::Vector2f ballVelocity{4.f, -4.f};
+
+    // ------------------- SECOND BALL (Player 2) -------------------
+    sf::CircleShape ball2(10.f); 
+    ball2.setFillColor(sf::Color::Yellow); 
+    ball2.setOrigin({10.f, 10.f});
+    ball2.setPosition({400.f, 50.f}); // V7 NEW: second ball above dividing line
+
+    sf::Vector2f ballVelocity2{4.f, 4.f}; // V7 NEW: separate velocity for player 2
+
 
     // ------------------- BRICKS -------------------
     struct Brick {
@@ -56,7 +65,14 @@ int main() {
             b.shape.setOutlineColor(sf::Color::Black);
 
             // Position bricks in grid
-            b.shape.setPosition({i * 100.f + 5.f, j * 35.f + 40.f}); 
+            // Split bricks into top (0-2) and bottom (3-5)
+            if (j < 3) {                                   
+                // TOP 3 ROWS (Player 2 side)
+                b.shape.setPosition({i * 100.f + 5.f, j * 35.f + 180.f}); 
+            } else {
+                // BOTTOM 3 ROWS (Player 1 side)
+                b.shape.setPosition({i * 100.f + 5.f, (j - 3) * 35.f + 350.f});
+            } 
 
             bricks.push_back(b);
         }
@@ -91,7 +107,7 @@ int main() {
         if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::A) &&
             paddle2.getPosition().x > 50)
         {
-            paddle2.move({-7.f, 0.f}); // Move left   // V4- Adding control of Player2
+            paddle2.move({-7.f, 0.f}); // Move left  
         }
 
         if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::D) &&
@@ -105,10 +121,14 @@ int main() {
 
         sf::Vector2f pos = ball.getPosition();
 
+        ball2.move(ballVelocity2); // V7 NEW: move second ball
+
 
                 // ******** COLLISIONS **********
 
-        // -------- WALL COLLISIONS --------
+            // -------- WALL COLLISIONS --------
+
+        // -------- First BALL WALL COLLISIONS --------
         if (pos.x < 10 || pos.x > 790)
             ballVelocity.x = -ballVelocity.x; // Left/right bounce
 
@@ -118,12 +138,52 @@ int main() {
         if (pos.y > 600)
             window.close(); // Game over
 
-        // -------- PADDLE COLLISION --------
+        // -------- SECOND BALL WALL COLLISIONS --------
+        sf::Vector2f pos2 = ball2.getPosition(); // V7 NEW
+
+        if (pos2.x < 10 || pos2.x > 790)
+            ballVelocity2.x = -ballVelocity2.x;
+
+        if (pos2.y > 590)
+            ballVelocity2.y = -ballVelocity2.y; // V7 NEW: bounce from bottom
+
+            if (pos2.y < 0)
+                window.close(); // V8 NEW: top player loses
+
+
+        // -------- PLAYER 1 (BOTTOM) PADDLE COLISSION --------
         if (ball.getGlobalBounds().findIntersection(paddle.getGlobalBounds())) {
-            ballVelocity.y = -ballVelocity.y;
+            ballVelocity.y = -abs(ballVelocity.y); // always go UP
         }
 
-        // -------- BRICK COLLISION --------
+        // -------- PLAYER 2 PADDLE COLLISION (BALL 2) --------
+        if (ball2.getGlobalBounds().findIntersection(paddle2.getGlobalBounds())) {
+            ballVelocity2.y = abs(ballVelocity2.y); // V7 NEW
+        }
+
+         // -------- DIVIDING LINE COLLISION (Ball 1) --------
+        if (ball.getGlobalBounds().findIntersection(dividingLine.getGlobalBounds())) {
+    
+            // Only bounce if moving toward the line
+            if (ballVelocity.y < 0 && ball.getPosition().y > 300) {
+                ballVelocity.y = -ballVelocity.y;
+            }
+            else if (ballVelocity.y > 0 && ball.getPosition().y < 300) {
+                ballVelocity.y = -ballVelocity.y;
+            }
+        }
+
+        // -------- DIVIDING LINE COLLISION (BALL 2) --------
+        if (ball2.getGlobalBounds().findIntersection(dividingLine.getGlobalBounds())) {
+            ballVelocity2.y = -ballVelocity2.y; // V8 NEW
+        }
+
+        // -------- PLAYER 2 (TOP) PADDLE COLISSION--------
+        if (ball.getGlobalBounds().findIntersection(paddle2.getGlobalBounds())) {
+            ballVelocity.y = abs(ballVelocity.y); // always go DOWN
+        }                                           
+
+        // -------- BRICK COLLISION (Ball1) --------
         for (auto& b : bricks) {
             if (!b.destroyed &&
                 ball.getGlobalBounds().findIntersection(b.shape.getGlobalBounds()))
@@ -132,15 +192,23 @@ int main() {
                 ballVelocity.y = -ballVelocity.y; // Bounce
                 break;
             }
+            // -------- BRICK COLLISION (BALL 2) --------
+            if (!b.destroyed &&
+                ball2.getGlobalBounds().findIntersection(b.shape.getGlobalBounds()))
+            {
+                b.destroyed = true;
+                ballVelocity2.y = -ballVelocity2.y; // V7 NEW
+            }
         }
 
         // -------- RENDERING --------
         window.clear();
 
         window.draw(paddle);
-        window.draw(paddle2); // Added in V4 code --> new paddle
+        window.draw(paddle2); 
         window.draw(dividingLine); 
         window.draw(ball);
+        window.draw(ball2); // V7.... New
 
         for (const auto& b : bricks) {
             if (!b.destroyed)
