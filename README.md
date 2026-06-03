@@ -321,14 +321,7 @@ Developed as part of **CS-107: Computer Programming (Spring 2026)** at **NUST SE
 * Aakash Shahid Butt
 * Muhammad Saim
 
-## Documentation
 
-The complete project report is available in:
-
-```text
-docs/Project_Report.pdf
-
-```
 
 ## License
 
